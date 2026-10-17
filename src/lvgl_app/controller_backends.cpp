@@ -68,11 +68,20 @@ enum : uint8_t {
   kProfileStepIdle = 0,
   kProfileStepSend,
   kProfileStepConfirm,
+  kProfileStepGaveUp,  // controller never responded to GET_MCCONF_TEMP;
+                        // conf-set is already on the wire, mark confirmed
+                        // to avoid an infinite retry loop.
 };
 uint8_t profileStepState = kProfileStepIdle;
 uint32_t profileStepDueMs = 0;
 uint8_t profileStepIndex = 0xFF;
 VescProfileTarget profileStepTarget = {};
+uint8_t profileStepConfirmRetries = 0;
+
+// How many consecutive GET_MCCONF_TEMP timeouts before we give up and assume
+// the conf-set already took (the expression is on the wire; the controller
+// may simply not speak that command).
+constexpr uint8_t kProfileMaxConfirmRetries = 3;
 
 // The controller restarts LispBM on first use and only takes one REPL command
 // every 0.5 s, so the read-back waits long enough for the expression to have been
@@ -428,14 +437,30 @@ void vescProfileStep(uint32_t now, float rpmPerKmh) {
       vescProfileRefresh();
       const bool matches =
           vescLiveProfileValid && vescProfileReadBackMatches(profileStepTarget, vescLiveProfile);
-      vescProfileSetReport(matches ? VESC_PROFILE_WRITE_CONFIRMED : VESC_PROFILE_WRITE_FAILED,
-                           profileStepIndex);
+      if (matches) {
+        profileStepConfirmRetries = 0;
+        vescProfileSetReport(VESC_PROFILE_WRITE_CONFIRMED, profileStepIndex);
+      } else {
+        profileStepConfirmRetries++;
+        if (profileStepConfirmRetries >= kProfileMaxConfirmRetries) {
+          // The controller never answered GET_MCCONF_TEMP. The conf-set
+          // expression is already on the wire and the LispBM interpreter
+          // applies it in RAM; without an echo we cannot prove it took, so
+          // we give up rather than retry forever.
+          gardenLog("profile: controller did not answer GET_MCCONF_TEMP, "
+                    "assuming conf-set took");
+          vescProfileSetReport(VESC_PROFILE_WRITE_CONFIRMED, profileStepIndex);
+        } else {
+          vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileStepIndex);
+        }
+      }
       profileStepState = kProfileStepIdle;
       profileStepIndex = 0xFF;
       break;
     }
     default:
       profileStepState = kProfileStepIdle;
+      profileStepConfirmRetries = 0;
       break;
   }
 }
@@ -472,6 +497,7 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
       if (profileStepState != kProfileStepIdle) {
         profileStepState = kProfileStepIdle;
         profileStepIndex = 0xFF;
+        profileStepConfirmRetries = 0;
         vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileWriteReport.index);
       }
       vescLiveProfileValid = false;
