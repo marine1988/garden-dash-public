@@ -3019,12 +3019,11 @@ static void developerDisplayButtonEventCb(lv_event_t *e) {
   menuAction(BTN_MENU_DISPLAY);
 }
 
-// Reports the VESC cruise package's edge as a toast, and rebuilds the status
-// page when its state or settings line changes. Driven by the dashboard tick
-// (100 ms) and the package's one-line-per-second state message.
+// Reports the cruise state machine's outcome as a toast, and rebuilds the
+// cruise page when its state changes (OFF, HOLDING, ACTIVE). Driven by the
+// dashboard tick (100 ms) and the telemetry poll (100 ms).
 static bool cruiseStateKnown = false;
-static bool cruiseReportedActive = false;
-static uint32_t cruisePackageRevisionSeen = 0;
+static CruiseState cruiseReportedState = CRUISE_STATE_OFF;
 
 static void observeCruiseState() {
   CruiseOutcome outcome = CRUISE_OUTCOME_NONE;
@@ -3042,13 +3041,9 @@ static void observeCruiseState() {
     case CRUISE_OUTCOME_RELEASED_CANCEL: notice = NOTICE_CRUISE_CANCELLED; break;
     default: break;  // fault / link / speed / disabled: the dashboard shows those
   }
-  const bool active = state == CRUISE_STATE_ACTIVE;
-  const bool stateChanged = cruiseStateKnown && active != cruiseReportedActive;
-  const uint32_t revision = controllerCruisePackageRevision();
-  const bool revisionChanged = cruiseStateKnown && revision != cruisePackageRevisionSeen;
+  const bool stateChanged = cruiseStateKnown && state != cruiseReportedState;
   const bool rebuildNeeded =
-      (stateChanged || revisionChanged) && currentScreen == SCREEN_SUBMENU &&
-      submenuType == SUBMENU_CRUISE && !rebuildQueued;
+      stateChanged && currentScreen == SCREEN_SUBMENU && submenuType == SUBMENU_CRUISE && !rebuildQueued;
 
   // A state change rebuilds the cruise page, which deletes the toast it was
   // just created on. Queue the message in that case so loadScreen() delivers it
@@ -3060,12 +3055,11 @@ static void observeCruiseState() {
 
   if (!cruiseStateKnown) {
     cruiseStateKnown = true;
-    cruiseReportedActive = active;
-    cruisePackageRevisionSeen = revision;
+    cruiseReportedState = state;
     return;
   }
-  cruiseReportedActive = active;
-  cruisePackageRevisionSeen = revision;
+  if (!stateChanged) return;
+  cruiseReportedState = state;
   if (rebuildNeeded) queueLowMemoryRebuild(SCREEN_SUBMENU);
 }
 
@@ -6219,90 +6213,85 @@ static void showSubmenu() {
   if (submenuType == SUBMENU_CRUISE) {
     cruisePage = min<uint8_t>(cruisePage, 1);
     makeMenuTopBar(scr, vehicleSectionTitle(SUBMENU_CRUISE), cruisePage + 1, submenuItemCount(), true);
-    CruisePackageSnapshot pkg = {};
-    const bool available = controllerCruisePackageSnapshot(pkg);
-    if (!available) controllerCruiseRequestSettings();
-    char value[48];
-    if (!available) {
-      makeMenuButton(scr, kMenuEdgeX, 58, kMenuContentW, 56,
-                     txt("CRUISE PACKAGE NOT FOUND", "VAKIONOPEUDEN PAKETTIA EI LÖYDY",
-                         "TEMPOMAT-PAKET NICHT GEFUNDEN", "PACKAGE RÉGULATEUR INTROUVABLE",
-                         "PAQUETE DE CRUCERO NO ENCONTRADO", "PACCHETTO CRUISE NON TROVATO"),
-                     "", false, BTN_OPTION_BASE + 90);
-      makeExplanationAt(
-          scr, 130,
-          txt("Install the VESC Cruise Control package in VESC Tool and enable it. "
-              "The display only shows its state; it never drives the ADC override.",
-              "Asenna VESC Cruise Control -paketti VESC Toolissa ja ota se käyttöön. "
-              "Näyttö vain näyttää tilan; se ei ohjaa ADC-overridea.",
-              "Installiere das VESC-Cruise-Control-Paket in VESC Tool und aktiviere es. "
-              "Das Display zeigt nur den Zustand; es steuert das ADC-Override nicht.",
-              "Installez le package VESC Cruise Control dans VESC Tool et activez-le. "
-              "L'écran affiche seulement l'état ; il ne pilote pas l'ADC.",
-              "Instala el paquete VESC Cruise Control en VESC Tool y actívalo. "
-              "La pantalla solo muestra el estado; no controla el ADC.",
-              "Installa il pacchetto VESC Cruise Control in VESC Tool e attivalo. "
-              "Il display mostra solo lo stato; non pilota l'ADC."));
-      loadScreen(scr); return;
-    }
-
-    const bool active = pkg.state == CRUISE_PACKAGE_ON;
-    const bool engaging = pkg.state == CRUISE_PACKAGE_ENGAGING;
-    const char *stateText = active ? txt("CRUISE ON", "VAKIONOPEUS PÄÄLLÄ", "TEMPOMAT AN", "RÉGULATEUR ACTIF",
-                                         "CRUCERO ACTIVO", "CRUISE ATTIVO")
-                            : engaging ? txt("HOLD STEADY", "PIDÄ TASAINEN", "HALTEN", "MAINTENEZ",
-                                             "MANTÉN", "MANTIENI")
-                                       : txt("CRUISE OFF", "VAKIONOPEUS POIS", "TEMPOMAT AUS", "RÉGULATEUR INACTIF",
-                                             "CRUCERO INACTIVO", "CRUISE INATTIVO");
+    const bool supported = controllerSupportsCruise();
+    CruiseState state = CRUISE_STATE_OFF;
+    controllerCruiseState(state);
+    const bool active = state == CRUISE_STATE_ACTIVE;
+    const bool holding = state == CRUISE_STATE_HOLDING;
+    uint16_t targetKmh = 0;
+    if (active) controllerCruiseActive(targetKmh);
+    char value[160];
     if (cruisePage == 0) {
       makeMenuButton(scr, kMenuEdgeX, 44, kMenuContentW, 42,
-                     txt("VESC CRUISE PACKAGE", "VESC-VAKIONOPEUSPAKETTI", "VESC-TEMPOMAT-PAKET",
-                         "PACKAGE RÉGULATEUR VESC", "PAQUETE CRUCERO VESC", "PACCHETTO CRUISE VESC"),
-                     stateText, active, BTN_OPTION_BASE + 90);
-      snprintf(value, sizeof(value), "%.1f s", pkg.holdDeciS / 10.0F);
+                     txt("CRUISE CONTROL", "VAKIONOPEUS", "TEMPOMAT", "RÉGULATEUR", "CONTROL CRUCERO", "CRUISE CONTROL"),
+                     cruiseControlEnabled ? txt("Enabled", "Päällä", "Aktiv", "Actif", "Activo", "Attivo")
+                                          : txt("Disabled", "Pois", "Aus", "Désactivé", "Desactivado", "Disattivo"),
+                     cruiseControlEnabled, BTN_OPTION_BASE + kCruiseOptEnable);
+      snprintf(value, sizeof(value), "%.1f s", cruiseHoldTimeDeciS / 10.0F);
       makeMenuButton(scr, kMenuEdgeX, 90, kMenuContentW, 42,
-                     txt("HOLD TIME", "PITOAIKA", "HALTEZEIT", "MAINTIEN", "MANTENER", "TENUTA"), value,
-                     false, BTN_OPTION_BASE + 90);
-      snprintf(value, sizeof(value), "%u km/h", pkg.minSpeedKmh);
+                     txt("HOLD TIME", "PITOAIKA", "HALTEZEIT", "MAINTIEN", "MANTENER", "TENUTA"), value, false,
+                     BTN_OPTION_BASE + kCruiseOptHold);
+      snprintf(value, sizeof(value), "%u km/h", cruiseMinSpeedKmh);
       makeMenuButton(scr, kMenuEdgeX, 136, kTwoColLeftW, 42,
-                     txt("MIN SPEED", "MIN NOPEUS", "MIN-TEMPO", "VITESSE MIN", "VEL. MÍNIMA", "VEL. MINIMA"),
-                     value, false, BTN_OPTION_BASE + 90);
-      snprintf(value, sizeof(value), "%u km/h", pkg.maxSpeedKmh);
+                     txt("MIN SPEED", "MIN NOPEUS", "MIN-TEMPO", "VITESSE MIN", "VEL. MÍNIMA", "VEL. MINIMA"), value,
+                     false, BTN_OPTION_BASE + kCruiseOptMinSpeed);
+      snprintf(value, sizeof(value), "%u km/h", cruiseMaxSpeedKmh);
       makeMenuButton(scr, kTwoColRightX, 136, kTwoColRightW, 42,
                      txt("MAX SPEED", "MAX NOPEUS", "MAX-TEMPO", "VITESSE MAX", "VEL. MÁXIMA", "VEL. MASSIMA"),
-                     value, false, BTN_OPTION_BASE + 90);
-      makeExplanationAt(
-          scr, 186,
-          txt("Hold the throttle steady for the hold time. Brake or pull past it to cancel.",
-              "Pidä kaasu tasaisena pitoajan. Jarru tai veto pidemmälle peruuttaa.",
-              "Gas ruhig halten. Bremsen oder weiter ziehen bricht ab.",
-              "Maintenez les gaz stables. Freiner ou tirer annule.",
-              "Mantén el gas estable. Frenar o tirar más cancela.",
-              "Tieni gas stabile. Frenare o tirare oltre annulla."));
+                     value, false, BTN_OPTION_BASE + kCruiseOptMaxSpeed);
+      if (!supported) {
+        makeExplanationAt(scr, 186,
+                          txt("Cruise needs a VESC link.", "Vakionopeus vaatii VESC-yhteyden.",
+                              "Tempomat braucht einen VESC-Link.", "Le régulateur nécessite un lien VESC.",
+                              "El control crucero necesita un enlace VESC.", "Il cruise richiede un collegamento VESC."));
+      } else if (active) {
+        snprintf(value, sizeof(value), "%s %u km/h. %s", txt("CRUISE", "VAKIONOPEUS", "TEMPOMAT", "RÉGULATEUR",
+                                                            "CRUCERO", "CRUISE"),
+                 (unsigned)targetKmh,
+                 txt("Brake or slow down to cancel.", "Jarruta tai hidasta peruuttaaksesi.",
+                     "Bremsen oder langsamer werden zum Abbrechen.", "Freinez ou ralentissez pour annuler.",
+                     "Frena o reduce para cancelar.", "Frena o rallenta per annullare."));
+        makeExplanationAt(scr, 186, value);
+      } else if (holding) {
+        snprintf(value, sizeof(value), "%s. %s", txt("HOLD STEADY", "PIDÄ TASAINEN", "HALTEN", "MAINTENEZ",
+                                                             "MANTÉN", "MANTIENI"),
+                         txt("Cruise engages when the timer ends.", "Vakionopeus kytkeytyy ajastimen lopputtua.",
+                             "Tempomat aktiviert sich am Ende des Timers.", "Le régulateur s'active à la fin du minuteur.",
+                             "El crucero se activa al terminar el temporizador.", "Il cruise si attiva allo scadere."));
+        makeExplanationAt(scr, 186, value);
+      } else {
+        snprintf(value, sizeof(value), "%s %.1f s. %s", txt("RIDE STEADY FOR", "AJA TASAISESTI", "RUHIG FAHREN",
+                                                           "ROULEZ STABLE", "RUEDA ESTABLE", "GUIDA STABILE"),
+                 cruiseHoldTimeDeciS / 10.0F,
+                 txt("Brake or slow down to cancel.", "Jarruta tai hidasta peruuttaaksesi.",
+                     "Bremsen oder langsamer werden zum Abbrechen.", "Freinez ou ralentissez pour annuler.",
+                     "Frena o reduce para cancelar.", "Frena o rallenta per annullare."));
+        makeExplanationAt(scr, 186, value);
+      }
     } else {
+      const char *stateText = active ? txt("CRUISE ON", "VAKIONOPEUS PÄÄLLÄ", "TEMPOMAT AN", "RÉGULATEUR ACTIF",
+                                           "CRUCERO ACTIVO", "CRUISE ATTIVO")
+                              : holding ? txt("HOLDING", "PIDETÄÄN", "HALTEN", "MAINTIEN", "MANTENIENDO", "IN ATTESA")
+                                        : txt("OFF", "POIS", "AUS", "INACTIF", "INACTIVO", "SPENTO");
       makeMenuButton(scr, kMenuEdgeX, 44, kMenuContentW, 42,
-                     txt("LAST CANCEL", "VIIMEISIN PERUUTUS", "LETZTE AUFHEBUNG", "DERNIÈRE ANNULATION",
-                         "ÚLTIMA CANCELACIÓN", "ULTIMA ANNULLAMENTO"),
-                     cruisePackageCancelName(pkg), false, BTN_OPTION_BASE + 90);
+                     txt("STATE", "TILA", "ZUSTAND", "ÉTAT", "ESTADO", "STATO"), stateText, active,
+                     BTN_OPTION_BASE + 90);
+      snprintf(value, sizeof(value), "%.1f s", cruiseHoldTimeDeciS / 10.0F);
       makeMenuButton(scr, kMenuEdgeX, 90, kMenuContentW, 42,
-                     txt("LEGAL LOCK", "LAILLINEN RAJA", "RECHTLICHE SPERRE", "VERROU LÉGAL",
-                         "BLOQUEO LEGAL", "BLOCCO LEGALE"),
-                     pkg.legalLocked ? txt("Locked", "Lukittu", "Gesperrt", "Verrouillé", "Bloqueado", "Bloccato")
-                                     : txt("Unlocked", "Auki", "Offen", "Déverrouillé", "Desbloqueado", "Sbloccato"),
-                     false, BTN_OPTION_BASE + 90);
+                     txt("HOLD TIME", "PITOAIKA", "HALTEZEIT", "MAINTIEN", "MANTENER", "TENUTA"), value, false,
+                     BTN_OPTION_BASE + 90);
       makeMenuButton(scr, kMenuEdgeX, 136, kMenuContentW, 42,
-                     txt("BEEPS", "ÄÄNET", "TÖNE", "BIPS", "PITIDOS", "BEEP"),
-                     pkg.beepsEnabled ? txt("On", "Päällä", "An", "Activés", "Activados", "Attivi")
-                                      : txt("Off", "Pois", "Aus", "Coupés", "Desactivados", "Disattivati"),
+                     txt("CANCEL", "PERUUTA", "ABBRECHEN", "ANNULER", "CANCELAR", "ANNULLA"),
+                     txt("Brake or slow down", "Jarruta tai hidasta", "Bremsen oder langsamer",
+                         "Freinez ou ralentissez", "Frena o reduce", "Frena o rallenta"),
                      false, BTN_OPTION_BASE + 90);
-      makeExplanationAt(
-          scr, 186,
-          txt("Configured in VESC Tool > App UI. The display only shows the package state.",
-              "Määritetään VESC Toolin App UI:ssa. Näyttö vain näyttää paketin tilan.",
-              "In VESC Tool > App UI einstellen. Das Display zeigt nur den Paketzustand.",
-              "Configuré dans VESC Tool > App UI. L'écran affiche seulement l'état.",
-              "Se configura en VESC Tool > App UI. La pantalla solo muestra el estado.",
-              "Configurato in VESC Tool > App UI. Il display mostra solo lo stato."));
+      makeExplanationAt(scr, 186,
+                        txt("No button: cruise engages by time and releases on a brake or a speed change.",
+                            "Ei painiketta: vakionopeus kytkeytyy ajalla ja vapautuu jarrusta tai nopeuden muutoksesta.",
+                            "Kein Knopf: Tempomat aktiviert per Zeit und löst bei Bremse oder Geschwindigkeitsänderung.",
+                            "Pas de bouton : le régulateur s'active par temps et se libère au frein ou au changement de vitesse.",
+                            "Sin botón: el crucero se activa por tiempo y se libera con el freno o un cambio de velocidad.",
+                            "Nessun pulsante: il cruise si attiva a tempo e si rilascia con freno o variazione di velocità."));
     }
     loadScreen(scr); return;
   }

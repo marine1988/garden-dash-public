@@ -11,15 +11,26 @@ bool cruiseModeAllowed(const CruiseSettings &settings, uint8_t mode) {
   return (settings.allowedModes & (uint8_t)(1u << (mode - 1))) != 0;
 }
 
+uint8_t cruiseHoldProgress(const CruiseRuntime &rt, const CruiseSettings &settings, uint32_t nowMs) {
+  if (rt.state != CRUISE_STATE_HOLDING || rt.holdSinceMs == 0) return 0;
+  const uint32_t holdMs = (uint32_t)(settings.holdTimeDeciS ? settings.holdTimeDeciS : 1) * 100UL;
+  const uint32_t elapsed = nowMs - rt.holdSinceMs;
+  if (elapsed >= holdMs) return 100;
+  return (uint8_t)(elapsed * 100UL / holdMs);
+}
+
 CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings, const CruiseInputs &in,
                                bool requestEngage, bool requestDisengage, uint32_t nowMs) {
-  (void)nowMs;
   CruiseOutput out = {};
   out.state = rt.state;
   out.outcome = CRUISE_OUTCOME_NONE;
 
   const bool wasActive = rt.state == CRUISE_STATE_ACTIVE;
   const bool braking = in.avgInputCurrent < kCruiseBrakeRegenAmps;
+  const auto resetHold = [&]() {
+    rt.holdSinceMs = 0;
+    rt.holdSpeedKmh = 0.0F;
+  };
 
   // Hands a live cruise back explicitly: the override is cleared and the ADC
   // application takes the throttle over again, instead of the controller
@@ -30,12 +41,13 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
     rt.state = CRUISE_STATE_OFF;
     rt.targetKmh = 0;
     rt.rpmPerKmh = 0.0F;
+    resetHold();
     out.state = rt.state;
     out.outcome = why;
   };
 
   // A fault, a dead link, a disabled setting or the rider's own cancel always
-  // wins, over a fresh engage request just as much as over a running cruise.
+  // wins, over a fresh hold just as much as over a running cruise.
   if (!settings.enabled || requestDisengage || !in.linkLive || in.faultCode != 0) {
     if (wasActive) {
       release(!settings.enabled ? CRUISE_OUTCOME_RELEASED_DISABLED
@@ -46,17 +58,12 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
       rt.state = CRUISE_STATE_OFF;
       rt.targetKmh = 0;
       rt.rpmPerKmh = 0.0F;
+      resetHold();
       out.state = rt.state;
     }
     return out;
   }
 
-  // A running cruise only ends through the safety checks below or the request
-  // block above. In particular a repeated engage request must not be evaluated
-  // as a fresh engage: if its gates failed it would drop the local state while
-  // the ADC application still held the setpoint, leaving a cruise that the
-  // display could no longer release. The application also captures its setpoint
-  // on the transition into cruise, so a second engage could not retarget it.
   if (wasActive) {
     // The rider is on the brakes: a regenerative (negative battery-side)
     // current while cruising means braking, so give the motor back at once
@@ -66,30 +73,39 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
       return out;
     }
 
-    // The rider has taken over: speed fell back under the window, which is what
-    // a stop or a hill start looks like. Give the motor back.
-    if (in.speedKmh < (float)settings.minSpeedKmh) {
+    // Below the configured floor, or so far above the ceiling that the rider is
+    // clearly asking for more than cruise, hand control back first. A stop is
+    // "speed low", not just a moved throttle.
+    if (in.speedKmh < (float)settings.minSpeedKmh ||
+        in.speedKmh > (float)settings.maxSpeedKmh + kCruiseOverspeedMarginKmh) {
       release(CRUISE_OUTCOME_RELEASED_SPEED);
       return out;
     }
 
-    // Nothing to send: the ADC application holds the setpoint every cycle, so
-    // there is no heartbeat to keep alive.
+    // The rider has taken over: a real throttle pull or a coast moves speed
+    // away from the captured target. The display cannot read the throttle pin,
+    // so this is its equivalent of the package's "throttle moved".
+    if (fabsf(in.speedKmh - (float)rt.targetKmh) > kCruiseOverspeedMarginKmh) {
+      release(CRUISE_OUTCOME_RELEASED_CANCEL);
+      return out;
+    }
+
+    // Nothing to send: the ADC application holds the setpoint every cycle.
     out.state = rt.state;
     return out;
   }
 
+  // Manual engage remains available to host tests and older callers. The
+  // display itself never uses it: the cruise page has no button.
   if (requestEngage) {
-    // Taking the throttle over while the brake is applied would fight the
-    // rider. Refuse and stay off; the rider can ask again once rolling.
     if (braking) {
       rt.state = CRUISE_STATE_OFF;
       rt.targetKmh = 0;
       rt.rpmPerKmh = 0.0F;
+      resetHold();
       out.state = rt.state;
       return out;
     }
-
     const bool fastEnough = in.speedKmh >= (float)settings.minSpeedKmh;
     const bool modeOk = cruiseModeAllowed(settings, in.rideMode);
     const bool convertible = in.rpmPerKmh > 0.0F;
@@ -100,6 +116,7 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
       rt.state = CRUISE_STATE_ACTIVE;
       rt.targetKmh = (uint16_t)lroundf(target);
       rt.rpmPerKmh = in.rpmPerKmh;
+      resetHold();
       out.send = true;
       out.lisp = kCruiseLispEngage;
       out.state = rt.state;
@@ -114,6 +131,46 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
     return out;
   }
 
+  // The scooter has to be moving inside the window and still driving. A coast
+  // or regen produces no positive battery current, so it cannot start a hold.
+  if (in.speedKmh < (float)settings.minSpeedKmh || in.speedKmh > (float)settings.maxSpeedKmh ||
+      in.rpmPerKmh <= 0.0F || braking || in.avgInputCurrent < kCruiseMinDriveAmps) {
+    rt.state = CRUISE_STATE_OFF;
+    rt.targetKmh = 0;
+    rt.rpmPerKmh = 0.0F;
+    resetHold();
+    out.state = rt.state;
+    return out;
+  }
+
+  // Start a new window when speed was not already steady, or when the rider
+  // moved outside the deadband. The window follows the current speed while it
+  // is stable, so display rounding by one km/h does not restart it.
+  if (rt.holdSinceMs == 0 || fabsf(in.speedKmh - rt.holdSpeedKmh) > kCruiseSteadyDeadbandKmh) {
+    rt.holdSinceMs = nowMs;
+    rt.holdSpeedKmh = in.speedKmh;
+    rt.state = CRUISE_STATE_HOLDING;
+    out.state = rt.state;
+    return out;
+  }
+
+  const uint32_t holdMs = (uint32_t)(settings.holdTimeDeciS ? settings.holdTimeDeciS : 1) * 100UL;
+  if ((uint32_t)(nowMs - rt.holdSinceMs) < holdMs) {
+    rt.state = CRUISE_STATE_HOLDING;
+    out.state = rt.state;
+    return out;
+  }
+
+  float target = in.speedKmh;
+  if (target > (float)settings.maxSpeedKmh) target = (float)settings.maxSpeedKmh;
+  if (target < (float)settings.minSpeedKmh) target = (float)settings.minSpeedKmh;
+  rt.state = CRUISE_STATE_ACTIVE;
+  rt.targetKmh = (uint16_t)lroundf(target);
+  rt.rpmPerKmh = in.rpmPerKmh;
+  resetHold();
+  out.send = true;
+  out.lisp = kCruiseLispEngage;
   out.state = rt.state;
+  out.outcome = CRUISE_OUTCOME_ENGAGED;
   return out;
 }

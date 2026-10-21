@@ -379,6 +379,58 @@ void testBrakeReleases() {
   expect(!held.send && held.state == CRUISE_STATE_ACTIVE, "light regen: cruise holds");
 }
 
+void testAutomaticHoldEngages() {
+  CruiseRuntime rt = fresh();
+  CruiseSettings s = baseSettings();
+  s.holdTimeDeciS = 20;  // 2 s
+  CruiseInputs in = baseInputs();
+  in.avgInputCurrent = 10.0F;  // the rider is driving, not coasting
+
+  CruiseOutput out = cruiseControlStep(rt, s, in, false, false, 1000);
+  expect(out.state == CRUISE_STATE_HOLDING && !out.send, "auto: first steady tick starts HOLDING");
+  expect(cruiseHoldProgress(rt, s, 2000) == 50, "auto: progress is 50% after half the hold time");
+
+  out = cruiseControlStep(rt, s, in, false, false, 2000);
+  expect(out.state == CRUISE_STATE_HOLDING && !out.send, "auto: still holding at half time");
+
+  out = cruiseControlStep(rt, s, in, false, false, 3000);
+  expect(out.state == CRUISE_STATE_ACTIVE && sentEngage(out), "auto: engages after the hold time");
+  expect(out.outcome == CRUISE_OUTCOME_ENGAGED, "auto: outcome ENGAGED");
+  expect(rt.targetKmh == 20, "auto: captures the steady speed");
+
+  // A speed change beyond the deadband cancels a running cruise.
+  in.speedKmh = 25.0F;
+  out = cruiseControlStep(rt, s, in, false, false, 4000);
+  expect(out.state == CRUISE_STATE_OFF && sentRelease(out), "auto: moved speed releases");
+  expect(out.outcome == CRUISE_OUTCOME_RELEASED_CANCEL, "auto: moved speed is a cancel");
+}
+
+void testAutomaticHoldResetsWhenSpeedMoves() {
+  CruiseRuntime rt = fresh();
+  CruiseSettings s = baseSettings();
+  s.holdTimeDeciS = 20;
+  CruiseInputs in = baseInputs();
+  in.avgInputCurrent = 10.0F;
+
+  cruiseControlStep(rt, s, in, false, false, 0);
+  in.speedKmh = 23.0F;  // outside the 2 km/h deadband
+  CruiseOutput out = cruiseControlStep(rt, s, in, false, false, 500);
+  expect(out.state == CRUISE_STATE_HOLDING && !out.send, "auto: moved speed restarts the hold");
+  out = cruiseControlStep(rt, s, in, false, false, 1500);
+  expect(out.state == CRUISE_STATE_HOLDING, "auto: restarted hold still waiting");
+  out = cruiseControlStep(rt, s, in, false, false, 2500);
+  expect(out.state == CRUISE_STATE_ACTIVE && sentEngage(out), "auto: engages from the restarted window");
+}
+
+void testAutomaticHoldNeedsDriveCurrent() {
+  CruiseRuntime rt = fresh();
+  const CruiseSettings s = baseSettings();
+  CruiseInputs in = baseInputs();
+  in.avgInputCurrent = 0.2F;  // coasting/regen, not driving
+  const CruiseOutput out = cruiseControlStep(rt, s, in, false, false, 1000);
+  expect(out.state == CRUISE_STATE_OFF && !out.send, "auto: coasting cannot start a hold");
+}
+
 void testNoReleaseWhenInactive() {
   const CruiseSettings s = baseSettings();
   const CruiseInputs base = baseInputs();
@@ -476,6 +528,9 @@ int main() {
   testDisengageBeatsEngage();
   testSpeedDropReleases();
   testBrakeReleases();
+  testAutomaticHoldEngages();
+  testAutomaticHoldResetsWhenSpeedMoves();
+  testAutomaticHoldNeedsDriveCurrent();
   testNoReleaseWhenInactive();
   testModeAllowedWindow();
   testEncodeHelpers();

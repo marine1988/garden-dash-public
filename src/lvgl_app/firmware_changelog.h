@@ -16,9 +16,9 @@ struct FirmwareChangelogEntry {
 
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
-        "2026-10-21",
-        "VESC cruise package",
-        "Cruise follows the VESC package; the display shows state/settings, no button.",
+        "2026-10-22",
+        "Cruise by steady speed",
+        "Cruise engages after a steady-speed hold; no button and no VESC package.",
     },
     {
         "2026-10-21",

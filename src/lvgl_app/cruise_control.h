@@ -16,18 +16,19 @@
 // the holder of the setpoint. Nothing here touches Arduino or LVGL, so the host
 // tests drive the state machine directly.
 //
+// Engagement is automatic and time-based, like the scooter cruise packages:
+// once the rider has held a steady speed for the configured hold time, the
+// display sends the engage expression; there is no engage button. A brake, a
+// speed change (throttle moved or coasting), falling below the minimum, a
+// fault, a dead link or switching cruise off releases it. The display cannot
+// read the throttle pin, so "steady" means speed within a small deadband while
+// the controller is still drawing drive current.
+//
 // Engage sends one expression that detaches the ADC buttons (the throttle stays
 // attached) and sets the cruise override; the app then holds the speed the
 // rider had. Release clears the override and hands the throttle back untouched.
 // The two steps must travel together: the firmware's LispBM REPL accepts only
 // one command every 0.5 s, so two packets would drop the second.
-//
-// Safety, in the order it is applied each cycle: a fault, a dead link, a
-// disabled setting, the rider's own cancel, a brake (regenerative current), or
-// falling back under the minimum speed always disengages; the rider cannot
-// engage below the minimum speed, while braking, or in a ride mode the profile
-// does not allow. The controller has no command timeout to outrun because the
-// display is no longer the writer of the motor command.
 
 // Ride modes the controller can report in telemetry, 1..3, matching the three
 // configurable speed modes. 0 means the controller does not report one.
@@ -40,16 +41,17 @@ enum CruiseRideMode : uint8_t {
 
 struct CruiseSettings {
   bool enabled;
-  uint16_t holdTimeDeciS;       // press-and-hold to engage, tenths of a second
-  uint16_t minSpeedKmh;         // below this, cruise refuses to engage
+  uint16_t holdTimeDeciS;       // steady-speed time before automatic engage
+  uint16_t minSpeedKmh;         // below this, cruise refuses to engage / releases
   uint16_t maxSpeedKmh;         // ceiling the captured target is clamped to
-  uint8_t allowedModes;         // bit (1 << (mode-1)); 0 refuses every reported mode
+  uint8_t allowedModes;         // retained for the stored settings; unknown VESC modes are admitted
 };
 
 enum CruiseState : uint8_t {
   CRUISE_STATE_OFF,
+  CRUISE_STATE_HOLDING,  // speed is steady, waiting for the hold time
   CRUISE_STATE_ACTIVE,
-  CRUISE_STATE_BLOCKED,  // an engage request was refused (too slow, mode or gearing not usable)
+  CRUISE_STATE_BLOCKED,  // kept for the existing UI/outcome mapping
 };
 
 // The outcome of the cycle, for the UI to report. It is an edge: the step
@@ -95,6 +97,8 @@ struct CruiseRuntime {
   CruiseState state;
   uint16_t targetKmh;  // the speed capture shown on the UI; the app holds the eRPM
   float rpmPerKmh;     // kept for the record; not used to re-derive a setpoint
+  uint32_t holdSinceMs;  // first tick of the current steady-speed window
+  float holdSpeedKmh;    // speed the window is following
 };
 
 // The two LispBM expressions the VESC ADC application understands. Engage keeps
@@ -113,15 +117,26 @@ constexpr const char *kCruiseLispDetachUndo = "(app-adc-detach 2 0)";
 // several amps.
 constexpr float kCruiseBrakeRegenAmps = -5.0F;
 
-// Applies one cycle and returns what, if anything, to send. `requestEngage` is
-// true on the cycle the rider asked to engage, `requestDisengage` on the one
-// they asked to stop. Called every telemetry poll. An engage request while
-// cruise is already active is ignored: the ADC application only captures its
-// setpoint on the transition into cruise, so a repeated request cannot retarget
-// it, and re-evaluating the engage gates on a live cruise could abandon the
-// hold without releasing it.
+// Speed may wander this much while the hold timer runs. The rider's hand and
+// the controller's speed loop both move a little; a real throttle pull or a
+// coast is larger and cancels a running cruise.
+constexpr float kCruiseSteadyDeadbandKmh = 2.0F;
+// Below this battery current the scooter is coasting or regenerating, not
+// driving, so the hold window is not allowed to start or continue.
+constexpr float kCruiseMinDriveAmps = 0.5F;
+// A running cruise cancels if speed climbs this far above the captured target.
+constexpr float kCruiseOverspeedMarginKmh = 3.0F;
+
+// Applies one cycle and returns what, if anything, to send. Engagement is
+// automatic: `requestEngage` is retained for API compatibility but no button
+// uses it. `requestDisengage` still lets a caller cancel immediately. Called
+// every telemetry poll.
 CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings, const CruiseInputs &in,
                                bool requestEngage, bool requestDisengage, uint32_t nowMs);
+
+// How far the current steady-speed window has progressed, 0..100. Zero when
+// cruise is not holding. Used by the cruise page to show the countdown.
+uint8_t cruiseHoldProgress(const CruiseRuntime &rt, const CruiseSettings &settings, uint32_t nowMs);
 
 // True when the reported ride mode is allowed by the settings. An unknown mode
 // (0 or any value outside 1..3) is admitted: the display only refuses a mode

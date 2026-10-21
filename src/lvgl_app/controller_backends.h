@@ -1,7 +1,6 @@
 #pragma once
 
 #include "controller_manager.h"
-#include "cruise_package.h"
 
 void vescUartBackendBegin();
 void vescBleBackendBegin();
@@ -23,13 +22,9 @@ bool vescCruiseActive(uint16_t &targetKmh);
 // Reported as an edge: the UI compares against the value it saw before, so a
 // message is shown once per transition. Writes both values under one lock.
 void vescCruiseOutcome(CruiseOutcome &outcome, CruiseState &state);
-// The vesc_cruise_control package's own state/settings, and a revision that
-// changes whenever a line from it changes something. The UI uses the revision
-// to rebuild the cruise page without polling every field.
-bool vescCruisePackageSnapshot(CruisePackageSnapshot &out);
-uint32_t vescCruisePackageRevision();
-// Ask the package to emit its settings line (COMM_CUSTOM_APP_DATA).
-void vescCruiseRequestSettings();
+// The current state, including HOLDING while the steady-speed timer runs.
+void vescCruiseState(CruiseState &state);
+uint8_t vescCruiseHoldProgress(uint32_t nowMs);
 
 // Profile writes, driven from the telemetry task for the same reason. The UI
 // leaves the slot number; the task snapshots it, writes the whole profile as

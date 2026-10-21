@@ -165,15 +165,15 @@ screens, not a mock-up. Task layout, data flow and threading rules are in
 
 ## Safety
 
-The firmware displays and records telemetry. On a VESC it integrates the
-[VESC Cruise Control](https://github.com/marine1988/vesc_cruise_control)
-package: the package runs on the controller, engages when the throttle is held
-steady for its configured time, and owns the ADC application's hold. The display
-shows the package's state and settings and a green `CRUISE` chip on the
-dashboard; it never sends its own ADC override. There is no engage button —
-brake or pull the throttle to cancel. The package still needs the VESC ADC
-application configured (throttle on ADC1, brake on ADC2). Controller profiles go
-further and set the controller's live speed and current
+The firmware displays and records telemetry. It also offers a display-side cruise
+control. On a VESC it drives the controller's own ADC application hold over
+LispBM, so the setpoint survives the throttle application that would overwrite a
+plain `COMM_SET_RPM` frame. There is no engage button: the display engages by
+itself after the scooter has held a steady speed for the configured hold time. It
+releases on braking (regenerative current), a real speed change, falling below
+the configured minimum, a controller fault, or a lost link. It needs the ADC
+application's "Cruise control button" enabled in VESC Tool and no separate VESC
+cruise package. Controller profiles go further and set the controller's live speed and current
 limits -- forward and reverse speed, acceleration and braking scales, field
 weakening, and the motor and battery current ceilings -- through a LispBM
 `conf-set` expression, then read them back to confirm. `conf-set` changes only

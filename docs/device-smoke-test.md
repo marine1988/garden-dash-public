@@ -95,16 +95,13 @@ and any failed step. Test both original and alternate CYD panels.
 - [ ] With the fake VESC, the sender shows the profile limits it received.
 - [ ] Tapping the profile badge on the dashboard cycles Eco/Drive/Sport,
       updates the badge immediately, and queues that profile to the controller.
-- [ ] The cruise page shows the installed VESC Cruise Control package state and
-      settings, with no engage/cancel button.
-- [ ] Holding the throttle steady for the package's hold time engages cruise;
-      the page reads `CRUISE ON` and the dashboard shows a green
+- [ ] Cruise has no engage button. Holding a steady speed for the configured
+      hold time shows `HOLDING` and then engages; the dashboard shows a green
       `CRUISE <speed>` chip.
-- [ ] Braking or pulling past the held throttle cancels; the chip disappears and
-      the last-cancel reason is shown.
-- [ ] If the package is not installed, the page says
-      `CRUISE PACKAGE NOT FOUND` and the display never sends its own ADC
-      override.
+- [ ] Braking, a real speed change, a stop below the minimum, a fault or link
+      loss releases the cruise and hides the chip.
+- [ ] The cruise page shows state, hold time and how to cancel; page 1 still
+      edits enable, hold time, min and max speed.
 
 ### FarDriver BLE
 

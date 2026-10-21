@@ -20,9 +20,9 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
-## 2026-10-21 — VESC cruise package
+## 2026-10-22 — Cruise by steady speed
 
-Cruise follows the VESC package; the display shows state/settings, no button.
+Cruise engages after a steady-speed hold; no button and no VESC package.
 
 ## 2026-10-21 — Profile and cruise fixes
 

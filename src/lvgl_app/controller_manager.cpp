@@ -734,16 +734,16 @@ void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   }
   vescCruiseOutcome(outcome, state);
 }
-bool controllerCruisePackageSnapshot(CruisePackageSnapshot &out) {
-  if (!controllerSupportsCruise()) return false;
-  return vescCruisePackageSnapshot(out);
+void controllerCruiseState(CruiseState &state) {
+  if (!controllerSupportsCruise()) {
+    state = CRUISE_STATE_OFF;
+    return;
+  }
+  vescCruiseState(state);
 }
-uint32_t controllerCruisePackageRevision() {
+uint8_t controllerCruiseHoldProgress() {
   if (!controllerSupportsCruise()) return 0;
-  return vescCruisePackageRevision();
-}
-void controllerCruiseRequestSettings() {
-  if (controllerSupportsCruise()) vescCruiseRequestSettings();
+  return vescCruiseHoldProgress(millis());
 }
 #else
 static bool previewCruiseActive = false;
@@ -763,21 +763,10 @@ void previewSetCruiseState(bool active, uint16_t targetKmh) {
   previewCruiseActive = active;
   previewCruiseTargetKmh = targetKmh;
 }
-bool controllerCruisePackageSnapshot(CruisePackageSnapshot &out) {
-  out = {};
-  out.available = true;
-  out.state = previewCruiseActive ? CRUISE_PACKAGE_ON : CRUISE_PACKAGE_OFF;
-  snprintf(out.lastCancel, sizeof(out.lastCancel), "none");
-  out.enabled = true;
-  out.holdDeciS = 50;
-  out.deadbandHundredths = 10;
-  out.minSpeedKmh = 5;
-  out.maxSpeedKmh = 25;
-  out.beepsEnabled = true;
-  return true;
+void controllerCruiseState(CruiseState &state) {
+  state = previewCruiseActive ? CRUISE_STATE_ACTIVE : CRUISE_STATE_OFF;
 }
-uint32_t controllerCruisePackageRevision() { return previewCruiseActive ? 1 : 0; }
-void controllerCruiseRequestSettings() {}
+uint8_t controllerCruiseHoldProgress() { return 0; }
 #endif
 
 // Controller profiles. The capability comes from the active backend's caps, so

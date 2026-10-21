@@ -53,9 +53,9 @@ not need to reserve layout space for them:
   per-theme (`85,3` normally, with explicit positions for Bar Graph, Pixel Gauge
   and Large Tiles). It has a 6 px extended click area.
 - **Cruise chip** — green, 100x18 at `110,1`, covering the dashboard title with
-  `CRUISE <target>` while the controller's ADC application holds. It is
-  passive, never captures touches, and is hidden unless the link is live, there
-  is no fault, and cruise is active.
+  `CRUISE <target>` while the display's auto cruise is `ACTIVE`. It is passive,
+  never captures touches, and is hidden unless the link is live, there is no
+  fault, and cruise is active.
 
 Both are checked in `cyd_runtime_input`; every dashboard preview shows the
 badge, and `01_cyber_hud_cruise` shows the cruise chip.
@@ -247,29 +247,28 @@ standard telemetry does not report a profile. Back traverses pages before
 returning to the parent; Next is absent on the final page. Field editors preserve
 the originating section and page. Use `makeMenuTopBar`, without extra arrows.
 
-Controller profile writes are implemented only by the VESC backends, through the
-confirmed APPLY path below. Gauge ranges are explicitly local display scales,
-never controller limits. Power & Current was a dead end (a notice telling the
-rider to use VESC Tool), so it and the VESC-side Ride Modes card are gone: the
-Configuration hub offers only cards that do something. Future write support must
-use separate confirmed and pending settings, explicit application, and read-back
-verification. Do not connect the existing gauge-scale globals to controller
-configuration writes.
+Controller configuration writes are not implemented by any backend, so no card
+here claims to change the controller's own limits. Gauge ranges are explicitly
+local display scales, never controller limits. Power & Current was a dead end (a
+notice telling the rider to use VESC Tool), so it and the VESC-side Ride Modes
+card are gone: the Configuration hub offers only cards that do something. Future
+write support must use separate confirmed and pending settings, explicit
+application, and read-back verification. Do not connect the existing gauge-scale
+globals to controller configuration writes.
 
 Cruise Control and Profiles are the hub's other two cards
 (`controllerConfigSections` builds the list, so the screen and its handler cannot
 disagree). Ride Modes stays only on FarDriver, which reports gears.
 
-Cruise is offered only on a VESC link and integrates the
-[VESC Cruise Control](https://github.com/marine1988/vesc_cruise_control)
-package. The package runs on the controller, watches the throttle and brake
-pins, and engages when the throttle has been held steady for its configured
-hold time. The display page is read-only: it shows the package state, hold time,
-min/max speed, last cancel, legal lock and beeps, and has no engage/cancel
-button. On connect and when the page opens without a package it asks for the
-settings with `(send-settings)`; if nothing answers it says
-`CRUISE PACKAGE NOT FOUND`. The display never sends its own ADC override while
-this package is installed. The dashboard chip is described above.
+Cruise is offered only on a VESC link. It is entirely display-side and has no
+engage button: the telemetry task watches for a steady speed (within 2 km/h)
+with positive drive current, starts a `HOLDING` timer, and after the configured
+hold time sends the native ADC cruise expression. It releases on a brake, a
+speed change, a stop below the minimum, an overspeed, a fault, a lost link or
+switching cruise off. Page 1 edits enable, hold time, minimum and maximum speed;
+page 2 shows `STATE`, `HOLD TIME` and how to cancel. The VESC still needs the ADC
+application and its "Cruise control button" enabled; no separate cruise package
+is used.
 
 Profiles is three pages. Slots (page 1) lists the three named profiles: tapping
 one selects it for editing, and the badge follows the selection. Limits (page 2)

@@ -2,7 +2,6 @@
 
 #include "app_state.h"
 #include "cruise_control.h"  // CruiseOutcome, CruiseState
-#include "cruise_package.h"
 #include "vesc_profile.h"  // VescProfileWriteReport
 
 constexpr uint8_t CONTROLLER_LINK_MAX_DEVICES = 12;
@@ -269,11 +268,9 @@ bool controllerCruiseActive(uint16_t &targetKmh);
 // An edge: the UI compares against the value it saw before, so a message is
 // shown once per transition.
 void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state);
-// The installed vesc_cruise_control package. False on FarDriver and on a VESC
-// link where the package has not answered yet.
-bool controllerCruisePackageSnapshot(CruisePackageSnapshot &out);
-uint32_t controllerCruisePackageRevision();
-void controllerCruiseRequestSettings();
+// HOLDING while the display's steady-speed timer runs; ACTIVE once engaged.
+void controllerCruiseState(CruiseState &state);
+uint8_t controllerCruiseHoldProgress();
 
 // Controller profiles written to the link. `controllerSupportsProfileWrite()` is
 // false on a FarDriver link and on the host preview, where the write is a no-op.
