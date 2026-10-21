@@ -22,12 +22,12 @@
 // The two steps must travel together: the firmware's LispBM REPL accepts only
 // one command every 0.5 s, so two packets would drop the second.
 //
-// Safety, in the order it is applied each cycle: a fault, a dead link, the
-// rider's own cancel, a brake (regenerative current), or falling back under the
-// minimum speed always disengages; the rider cannot engage below the minimum
-// speed or in a ride mode the profile does not allow. The controller has no
-// command timeout to outrun because the display is no longer the writer of the
-// motor command.
+// Safety, in the order it is applied each cycle: a fault, a dead link, a
+// disabled setting, the rider's own cancel, a brake (regenerative current), or
+// falling back under the minimum speed always disengages; the rider cannot
+// engage below the minimum speed, while braking, or in a ride mode the profile
+// does not allow. The controller has no command timeout to outrun because the
+// display is no longer the writer of the motor command.
 
 // Ride modes the controller can report in telemetry, 1..3, matching the three
 // configurable speed modes. 0 means the controller does not report one.
@@ -49,7 +49,7 @@ struct CruiseSettings {
 enum CruiseState : uint8_t {
   CRUISE_STATE_OFF,
   CRUISE_STATE_ACTIVE,
-  CRUISE_STATE_BLOCKED,  // an engage request was refused (too slow, mode not allowed)
+  CRUISE_STATE_BLOCKED,  // an engage request was refused (too slow, mode or gearing not usable)
 };
 
 // The outcome of the cycle, for the UI to report. It is an edge: the step
@@ -59,6 +59,7 @@ enum CruiseState : uint8_t {
 enum CruiseOutcome : uint8_t {
   CRUISE_OUTCOME_NONE = 0,
   CRUISE_OUTCOME_ENGAGED,
+  CRUISE_OUTCOME_FAILED,           // the controller rejected the LispBM command
   CRUISE_OUTCOME_BLOCKED_SLOW,     // refused: under the minimum speed
   CRUISE_OUTCOME_BLOCKED_MODE,     // refused: ride mode excluded by the profile
   CRUISE_OUTCOME_BLOCKED_GEARING,  // refused: wheel size/gearing not set
@@ -101,20 +102,29 @@ struct CruiseRuntime {
 // still brake with it after a release.
 constexpr const char *kCruiseLispEngage = "(progn (app-adc-detach 2 1) (app-adc-override 3 1))";
 constexpr const char *kCruiseLispRelease = "(app-adc-override 3 0)";
+// If the engage expression is rejected after the detach form ran, give the
+// controller's physical buttons back. Releasing the override alone does not
+// reattach them.
+constexpr const char *kCruiseLispDetachUndo = "(app-adc-detach 2 0)";
 
-// Battery-side current at or below this while cruising is read as the rider
-// braking regeneratively, and releases the cruise at once. The value is
-// deliberately conservative: a downhill coast can feed a little back, but a
-// real brake pulls several amps.
+// Battery-side current below this while cruising is read as the rider braking
+// regeneratively, and releases the cruise at once. The value is deliberately
+// conservative: a downhill coast can feed a little back, but a real brake pulls
+// several amps.
 constexpr float kCruiseBrakeRegenAmps = -5.0F;
 
 // Applies one cycle and returns what, if anything, to send. `requestEngage` is
 // true on the cycle the rider asked to engage, `requestDisengage` on the one
-// they asked to stop. Called every telemetry poll.
+// they asked to stop. Called every telemetry poll. An engage request while
+// cruise is already active is ignored: the ADC application only captures its
+// setpoint on the transition into cruise, so a repeated request cannot retarget
+// it, and re-evaluating the engage gates on a live cruise could abandon the
+// hold without releasing it.
 CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings, const CruiseInputs &in,
                                bool requestEngage, bool requestDisengage, uint32_t nowMs);
 
 // True when the reported ride mode is allowed by the settings. An unknown mode
-// (0) or a mask of 0 does not block: the display only refuses a mode the rider
-// explicitly excluded.
+// (0 or any value outside 1..3) is admitted: the display only refuses a mode
+// the rider explicitly excluded, and most controllers report no mode at all.
+// An empty allow list admits no reported mode.
 bool cruiseModeAllowed(const CruiseSettings &settings, uint8_t mode);

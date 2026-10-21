@@ -175,17 +175,22 @@ ControllerPollResult noPoll(ControllerSample &) { return CONTROLLER_POLL_NO_SAMP
 #define FARDRIVER_POLL farDriverBackendPoll
 #endif
 
+// The two VESC entries get 6 KiB of telemetry-task stack. A profile write
+// builds a full LispBM expression and pushes it through the transport in one
+// poll; the expression buffers now live outside the stack, but NimBLE's write
+// path still has its own call chain. 4 KiB left no margin and a stack overflow
+// there rebooted the display on every reconnect.
 const ControllerBackend kBackends[] = {
     {CONTROLLER_ID_VESC_UART, "VESC", CONTROLLER_TRANSPORT_UART,
      {false, true, true, false, true, false, false, true, true},
      VESC_UART_BEGIN, VESC_BACKEND_STOP, noReset, quiesceImmediately,
      noScan, noConnect, noDisconnect, nullptr, uartLinkStatus, noDiagnostics,
-     VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 4096},
+     VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 6144},
     {CONTROLLER_ID_VESC_BLE, "VESC", CONTROLLER_TRANSPORT_BLE,
      {true, false, true, false, true, false, false, true, true},
      VESC_BLE_BEGIN, VESC_BACKEND_STOP, resetVescBle, quiesceVescBle,
      startVescScan, connectVesc, disconnectVesc, reconnectVesc, vescBleLinkStatus, noDiagnostics,
-     VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 4096},
+     VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 6144},
     {CONTROLLER_ID_FARDRIVER_BLE, "FarDriver", CONTROLLER_TRANSPORT_BLE,
      {true, false, false, true, false, false, true, false, false},
      FARDRIVER_BEGIN, FARDRIVER_STOP, resetFarDriverBle, quiesceFarDriverBle,
@@ -730,12 +735,22 @@ void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   vescCruiseOutcome(outcome, state);
 }
 #else
+static bool previewCruiseActive = false;
+static uint16_t previewCruiseTargetKmh = 0;
 void controllerCruiseEngage() {}
 void controllerCruiseDisengage() {}
-bool controllerCruiseActive(uint16_t &) { return false; }
+bool controllerCruiseActive(uint16_t &targetKmh) {
+  if (!previewCruiseActive) return false;
+  targetKmh = previewCruiseTargetKmh;
+  return true;
+}
 void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   outcome = CRUISE_OUTCOME_NONE;
-  state = CRUISE_STATE_OFF;
+  state = previewCruiseActive ? CRUISE_STATE_ACTIVE : CRUISE_STATE_OFF;
+}
+void previewSetCruiseState(bool active, uint16_t targetKmh) {
+  previewCruiseActive = active;
+  previewCruiseTargetKmh = targetKmh;
 }
 #endif
 
@@ -752,9 +767,20 @@ VescProfileWriteReport controllerProfileWriteReport() {
   if (!controllerSupportsProfileWrite()) return {VESC_PROFILE_WRITE_IDLE, 0xFF};
   return vescProfileWriteReportGet();
 }
+bool controllerProfileReadBack(VescMcconfTemp &out) {
+  if (!controllerSupportsProfileWrite()) return false;
+  return vescProfileReadBackCopy(out);
+}
 #else
 void controllerProfileWrite(uint8_t) {}
 VescProfileWriteReport controllerProfileWriteReport() {
   return {VESC_PROFILE_WRITE_IDLE, 0xFF};
+}
+bool controllerProfileReadBack(VescMcconfTemp &out) {
+  // The host preview has no wire, but the profile screens inject a read-back
+  // directly to render the CTRL line.
+  if (!vescLiveProfileValid) return false;
+  out = vescLiveProfile;
+  return true;
 }
 #endif

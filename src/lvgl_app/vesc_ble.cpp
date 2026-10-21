@@ -283,7 +283,21 @@ void VescBleStream::flush() {}
 size_t VescBleStream::write(uint8_t value) { return write(&value, 1); }
 size_t VescBleStream::write(const uint8_t *buffer, size_t size) {
   if (!rxCharacteristic || !client || !client->isConnected()) return 0;
+  // One profile frame is ~200 bytes. Writing it as ten 20-byte no-response
+  // writes consumed nearly every NimBLE MSYS block at once and could starve the
+  // radio; using the negotiated ATT payload (MTU - 3) sends it in one write on
+  // a normal 247-byte link. Fall back to 20 when the MTU is not known yet.
+  const uint16_t mtu = client->getMTU();
+  const size_t chunkSize = mtu > 3 ? (size_t)(mtu - 3) : 20u;
   size_t sent = 0;
-  while (sent < size) { const size_t chunk = min<size_t>(20, size - sent); if (!rxCharacteristic->writeValue(buffer + sent, chunk, false)) break; sent += chunk; }
+  while (sent < size) {
+    const size_t chunk = min<size_t>(chunkSize, size - sent);
+    if (!rxCharacteristic->writeValue(buffer + sent, chunk, false)) break;
+    sent += chunk;
+    // At a 23-byte MTU a profile is still ten writes. Yield so the NimBLE host
+    // can retire the mbufs instead of queueing the whole frame into the small
+    // MSYS pool at once.
+    if (sent < size) vTaskDelay(1);
+  }
   return sent;
 }

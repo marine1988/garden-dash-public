@@ -83,6 +83,24 @@ and any failed step. Test both original and alternate CYD panels.
 - [ ] Information reports transport connection separately from telemetry
       freshness.
 
+### Profiles and cruise (VESC)
+
+- [ ] Tapping a profile slot only marks it Selected; it does not write to the
+      controller.
+- [ ] APPLY writes the profile, the read-back confirms it, and the slot then
+      reads Applied.
+- [ ] Reboot or reconnect re-applies only the Applied profile after the link
+      settles. The display must not reboot or loop, even when no controller
+      answers.
+- [ ] With the fake VESC, the sender shows the profile limits it received and
+      `CRUISE ON <erpm>` while the ADC override holds.
+- [ ] Tapping the profile badge on the dashboard cycles Eco/Drive/Sport,
+      updates the badge immediately, and queues that profile to the controller.
+- [ ] While cruise is active, a green `CRUISE <target>` chip covers the
+      dashboard title; it disappears on release, brake, fault, or link loss.
+- [ ] Cruise engages by holding the button, holds eRPM, and releases on cancel,
+      brake, fault, or speed falling below the minimum.
+
 ### FarDriver BLE
 
 - [ ] Scan prioritizes likely FarDriver devices.

@@ -33,6 +33,14 @@ bool hasLabel(lv_obj_t *object, const char *text) {
   return false;
 }
 
+bool hasVisibleLabel(lv_obj_t *object, const char *text) {
+  if (lv_obj_has_flag(object, LV_OBJ_FLAG_HIDDEN)) return false;
+  if (lv_obj_check_type(object, &lv_label_class) && strcmp(lv_label_get_text(object), text) == 0) return true;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(object); i++)
+    if (hasVisibleLabel(lv_obj_get_child(object, i), text)) return true;
+  return false;
+}
+
 lv_obj_t *findLabel(lv_obj_t *object, const char *text) {
   if (lv_obj_check_type(object, &lv_label_class) && strcmp(lv_label_get_text(object), text) == 0) return object;
   for (uint32_t i = 0; i < lv_obj_get_child_cnt(object); i++)
@@ -130,6 +138,40 @@ int main() {
   uiShow(SCREEN_DASHBOARD);
   cyd::preview::advanceTime(20);
   if (!expectScreen(SCREEN_DASHBOARD, "boot")) return 1;
+
+  // The profile badge is the dashboard shortcut: a tap cycles the slot and
+  // names it in the shared status toast. The badge sits at (85,3) in the HUD.
+  for (uint8_t i = 0; i < kControllerProfileCount; i++) resetControllerProfile(i);
+  applyControllerProfile(0);
+  uiShow(SCREEN_DASHBOARD);
+  cyd::preview::advanceTime(200);
+  tap(96, 14);
+  cyd::preview::advanceTime(300);
+  if (!expect(activeControllerProfile == 1, "the dashboard badge did not select Drive") ||
+      !expect(hasLabel(lv_scr_act(), "DRIVE PROFILE"), "the dashboard badge did not name Drive"))
+    return 1;
+  tap(96, 14);
+  cyd::preview::advanceTime(300);
+  if (!expect(activeControllerProfile == 2, "the dashboard badge did not select Sport") ||
+      !expect(hasLabel(lv_scr_act(), "SPORT PROFILE"), "the dashboard badge did not name Sport"))
+    return 1;
+  tap(96, 14);
+  cyd::preview::advanceTime(300);
+  if (!expect(activeControllerProfile == 0, "the dashboard badge did not wrap to Eco") ||
+      !expect(hasLabel(lv_scr_act(), "ECO PROFILE"), "the dashboard badge did not name Eco"))
+    return 1;
+
+  // A running cruise is visible on the dashboard, not only on the cruise page.
+  previewSetCruiseState(true, 25);
+  uiShow(SCREEN_DASHBOARD);
+  cyd::preview::advanceTime(200);
+  if (!expect(hasVisibleLabel(lv_scr_act(), "CRUISE 25"), "the dashboard did not show the cruise state"))
+    return 1;
+  previewSetCruiseState(false, 0);
+  uiDashboardTick();
+  cyd::preview::advanceTime(200);
+  if (!expect(!hasVisibleLabel(lv_scr_act(), "CRUISE 25"), "the cruise chip stayed visible after release"))
+    return 1;
 
   // A dashboard tap reveals the real animated settings control. The second
   // tap activates that LVGL button; no preview setter skips the navigation.
@@ -307,6 +349,7 @@ int main() {
   uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
   resetControllerProfile(0);
   activeControllerProfile = 0xFF;
+  appliedControllerProfile = 0xFF;
   if (!expect(std::strcmp(controllerProfileName(0), "ECO") == 0 &&
                   std::strcmp(controllerProfileName(2), "SPORT") == 0 &&
                   std::strcmp(controllerProfileLetter(0), "E") == 0 &&
@@ -317,12 +360,34 @@ int main() {
   if (!expect(controllerProfiles[0].maxSpeedKmh == 25 && controllerProfiles[0].accelPercent == 40,
               "a reset slot holds its defaults"))
     return 1;
-  // Selecting is what the dashboard badge follows.
+  // Selecting is what the dashboard badge follows, and it is not a write:
+  // the controller is only touched once APPLY is confirmed, so a tap must not
+  // leave a slot marked as applied (a reconnect would replay it).
   applyControllerProfile(0);
   if (!expect(activeControllerProfile == 0, "selecting a profile records it as active")) return 1;
+  if (!expect(appliedControllerProfile == 0xFF, "selecting a profile marked it as applied")) return 1;
   // An out-of-range slot is refused rather than wrapping onto a real one.
   applyControllerProfile(9);
   if (!expect(activeControllerProfile == 0, "an out-of-range slot is refused")) return 1;
+  markControllerProfileApplied(9);
+  if (!expect(appliedControllerProfile == 0xFF, "an out-of-range slot cannot be marked applied")) return 1;
+  // A confirmed write is what marks a slot applied, and the mark is persisted on
+  // its own key so the backend can replay it without adopting the selection.
+  markControllerProfileApplied(1);
+  if (!expect(appliedControllerProfile == 1, "a confirmed write marked its slot applied")) return 1;
+  {
+    Preferences stored;
+    stored.begin("app", true);
+    const uint8_t applied = stored.getUChar("appliedProf", 0xFF);
+    stored.end();
+    if (!expect(applied == 1, "the applied slot was not persisted under app/appliedProf")) return 1;
+  }
+  // Resetting the slot the controller holds clears the mark: its numbers changed,
+  // so the controller no longer matches it. Resetting another slot leaves it.
+  resetControllerProfile(0);
+  if (!expect(appliedControllerProfile == 1, "resetting another slot cleared the applied mark")) return 1;
+  resetControllerProfile(1);
+  if (!expect(appliedControllerProfile == 0xFF, "resetting the applied slot kept it marked applied")) return 1;
   controllerProfiles[0].accelPercent = 77;
   resetControllerProfile(0);
   if (!expect(controllerProfiles[0].accelPercent == 40, "a reset restores the defaults")) return 1;

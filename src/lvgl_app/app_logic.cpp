@@ -91,6 +91,11 @@ uint8_t cruiseAllowedModes = (1u << 0) | (1u << 1);
 
 ControllerProfile controllerProfiles[kControllerProfileCount] = {};
 uint8_t activeControllerProfile = 0xFF;
+// What the controller was last confirmed to hold. Kept apart from the selection
+// on purpose: the VESC backend replays this on every reconnect, so adopting a
+// tapped-but-never-applied slot here would write a profile the rider only
+// looked at.
+volatile uint8_t appliedControllerProfile = 0xFF;
 // The controller's own live profile numbers, as last read back over
 // COMM_GET_MCCONF_TEMP. Published by the telemetry task; read by the values page.
 VescMcconfTemp vescLiveProfile = {};
@@ -1387,6 +1392,7 @@ struct AppSettingsSnapshot {
   uint16_t cruiseMaxSpeedKmh;
   uint8_t cruiseAllowedModes;
   uint8_t activeProfile;
+  uint8_t appliedProfile;
   DashboardCustomization profiles[MODE_COUNT];
 };
 
@@ -1460,19 +1466,33 @@ static void setDefaultControllerProfile(uint8_t index) {
 static void setDefaultControllerProfiles() {
   for (uint8_t i = 0; i < kControllerProfileCount; i++) setDefaultControllerProfile(i);
   activeControllerProfile = 0xFF;
+  appliedControllerProfile = 0xFF;
 }
 
 void applyControllerProfile(uint8_t index) {
   if (index >= kControllerProfileCount) return;
   // Selecting is all this does. The limits reach the controller through
   // controllerProfileWrite, which needs the telemetry task that owns the link.
+  // Marking the slot applied here would make the next boot or reconnect replay
+  // a profile the rider had only tapped, so appliedControllerProfile stays put
+  // until a write is confirmed.
   activeControllerProfile = index;
+  saveAppSettings();
+}
+
+void markControllerProfileApplied(uint8_t index) {
+  if (index >= kControllerProfileCount) return;
+  appliedControllerProfile = index;
   saveAppSettings();
 }
 
 void resetControllerProfile(uint8_t index) {
   if (index >= kControllerProfileCount) return;
   setDefaultControllerProfile(index);
+  // The slot's numbers just changed, so a controller holding them is out of
+  // date. The selection is untouched: the badge still follows what the rider
+  // chose, and re-applying the slot is a deliberate action.
+  if (appliedControllerProfile == index) appliedControllerProfile = 0xFF;
   saveAppSettings();
 }
 
@@ -1543,6 +1563,7 @@ static AppSettingsSnapshot currentAppSettingsSnapshot() {
   snapshot.cruiseMaxSpeedKmh = cruiseMaxSpeedKmh;
   snapshot.cruiseAllowedModes = cruiseAllowedModes;
   snapshot.activeProfile = activeControllerProfile;
+  snapshot.appliedProfile = appliedControllerProfile;
   memcpy(snapshot.profiles, dashboardCustomizations, sizeof(snapshot.profiles));
   return snapshot;
 }
@@ -1632,6 +1653,7 @@ void saveAppSettings() {
   PUT_CHANGED(cruiseMaxSpeedKmh, putUShort("cruiseMax", current.cruiseMaxSpeedKmh));
   PUT_CHANGED(cruiseAllowedModes, putUChar("cruiseModes", current.cruiseAllowedModes));
   PUT_CHANGED(activeProfile, putUChar("activeProf", current.activeProfile));
+  PUT_CHANGED(appliedProfile, putUChar("appliedProf", current.appliedProfile));
 #undef PUT_CHANGED
   if (!persistedControllerProfilesKnown || !sameControllerProfiles(controllerProfiles, persistedControllerProfiles)) {
     preferences.putBytes("profiles", controllerProfiles, sizeof(controllerProfiles));
@@ -1930,6 +1952,16 @@ void loadAppSettings() {
   }
   activeControllerProfile = preferences.getUChar("activeProf", 0xFF);
   if (activeControllerProfile >= kControllerProfileCount) activeControllerProfile = 0xFF;
+  // Selection and application are deliberately separate keys. A build that
+  // predates "appliedProf" (an upgrade from 0.01, where tapping a slot is what
+  // got persisted) stored only the selection, and that selection was never a
+  // write to the controller. Reading the key's absence as 0xFF therefore keeps
+  // the upgrade from replaying a profile the rider only tapped on the next
+  // boot or reconnect. A stale profile blob invalidates the mark for the same
+  // reason: the slot's numbers were replaced with defaults, so they no longer
+  // describe what the controller holds.
+  appliedControllerProfile = profileBlobCurrent ? preferences.getUChar("appliedProf", 0xFF) : 0xFF;
+  if (appliedControllerProfile >= kControllerProfileCount) appliedControllerProfile = 0xFF;
   const uint8_t storedMotorDataProfileRevision = preferences.getUChar(kMotorDataProfileRevisionKey, 0);
   const uint8_t storedBarGraphProfileRevision = preferences.getUChar(kBarGraphProfileRevisionKey, 0);
   const size_t storedLength = preferences.getBytesLength("uiProfiles");

@@ -20,6 +20,10 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
+## 2026-10-21 — Profile and cruise fixes
+
+Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.
+
 ## 2026-10-14 — VESC link on one connector
 
 A garden_usb build puts the VESC link on the power header's TX/RX: one cable, no log.

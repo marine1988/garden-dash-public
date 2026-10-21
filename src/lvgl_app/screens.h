@@ -12,6 +12,11 @@ ScreenMode uiCurrentScreen();
 // Called on a 100 ms timer while the dashboard is visible.
 void uiDashboardTick();
 
+// Called by the dashboard's profile badge when it is tapped: reports the newly
+// selected slot so the toast can name it. The caller applies and queues the
+// write; this only owns the UI notice.
+void uiNotifyProfileChanged(uint8_t index);
+
 // Called on the same timer, from the firmware only: returns a menu screen to
 // the dashboard once the vehicle moves or the rider stops touching it. The
 // host preview drives screens directly and must never be navigated away from

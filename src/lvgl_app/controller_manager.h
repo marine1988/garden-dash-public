@@ -277,7 +277,11 @@ void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state);
 bool controllerSupportsProfileWrite();
 void controllerProfileWrite(uint8_t index);
 VescProfileWriteReport controllerProfileWriteReport();
+// A consistent copy of the controller's own profile numbers, for the values
+// page. False on a link that cannot read them or before the first reply.
+bool controllerProfileReadBack(VescMcconfTemp &out);
 
 #ifdef CYD_LVGL_PREVIEW
 void previewSetControllerTelemetryFields(TelemetryFieldMask available, TelemetryFieldMask derived);
+void previewSetCruiseState(bool active, uint16_t targetKmh);
 #endif

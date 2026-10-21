@@ -101,10 +101,14 @@ enum StatusNotice : uint8_t {
   NOTICE_CRUISE_MODE_BLOCKED,
   NOTICE_CRUISE_GEARING,
   NOTICE_CRUISE_BRAKE,
+  NOTICE_CRUISE_FAILED,
   NOTICE_PROFILE_APPLIED,
   NOTICE_PROFILE_CLEARED,
   NOTICE_PROFILE_WRITE_CONFIRMED,
   NOTICE_PROFILE_WRITE_FAILED,
+  NOTICE_PROFILE_ECO,
+  NOTICE_PROFILE_DRIVE,
+  NOTICE_PROFILE_SPORT,
 };
 
 static StatusNotice pendingStatusNotice = NOTICE_NONE;
@@ -1057,6 +1061,8 @@ static constexpr uint32_t kDashboardControlsTimeoutMs = 2000;
 static lv_obj_t *dashboardSettingsButton = NULL;
 static lv_obj_t *dashboardLoggingControl = NULL;
 static lv_obj_t *dashboardLoggingLabel = NULL;
+static lv_obj_t *cruiseChip = NULL;
+static lv_obj_t *cruiseChipLabel = NULL;
 static lv_timer_t *dashboardControlsTimer = NULL;
 static bool dashboardControlsVisible = false;
 static constexpr uint32_t kSelectorSlideMs = cyd_ui::kMotionMs;
@@ -1482,6 +1488,47 @@ static void refreshLinkOverlay(bool force) {
   lv_obj_add_flag(linkChip, LV_OBJ_FLAG_HIDDEN);
 }
 
+// A cruise indicator that covers the title strip while the controller's ADC
+// application holds a setpoint. The title is not actionable, so using its space
+// keeps the badge out of every theme's gauges and footer. It is passive: the
+// rider reads it, the cruise page owns the controls.
+static void cruiseChipDeleteCb(lv_event_t *event) {
+  lv_obj_t *object = lv_event_get_target(event);
+  if (object == cruiseChip) {
+    cruiseChip = NULL;
+    cruiseChipLabel = NULL;
+  }
+}
+
+static void buildCruiseChip(lv_obj_t *scr) {
+  const lv_color_t green = c565(0x07E0);
+  cruiseChip = makePanel(scr, 110, 1, 100, 18, 4, green, green, true);
+  makePassive(cruiseChip);
+  lv_obj_set_style_border_width(cruiseChip, 0, 0);
+  lv_obj_set_style_shadow_width(cruiseChip, 0, 0);
+  lv_obj_add_event_cb(cruiseChip, cruiseChipDeleteCb, LV_EVENT_DELETE, NULL);
+  cruiseChipLabel = makeLabelAt(cruiseChip, 50, 2, "CRUISE", lv_color_black(), &lv_font_rajdhani_12, 3);
+  lv_obj_add_flag(cruiseChip, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void refreshCruiseChip() {
+  if (!cruiseChip) return;
+  uint16_t targetKmh = 0;
+  // The chip exists only on a dashboard screen, so no currentScreen check is
+  // needed; its delete callback clears the pointer when the screen goes away.
+  const bool active = telemetryLinkState() == LINK_LIVE && telemetryFaultCode() == 0 &&
+                      controllerCruiseActive(targetKmh);
+  if (!active) {
+    lv_obj_add_flag(cruiseChip, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  char text[24];
+  snprintf(text, sizeof(text), "CRUISE %u", (unsigned)targetKmh);
+  setLabelText(cruiseChipLabel, text);
+  lv_obj_clear_flag(cruiseChip, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(cruiseChip);
+}
+
 static void showDashboard() {
   setDemoMode(dashboardDemoModeEnabled);
   saveAppSettings();  // enterDashboard() persisted settings on every entry
@@ -1490,6 +1537,8 @@ static void showDashboard() {
   const DashboardValues values = snapshot.link == LINK_LIVE ? snapshot.values : DashboardValues{};
   setDashboardTelemetryFields(snapshot.available);
   buildDashboard(scr, values);
+  buildCruiseChip(scr);
+  refreshCruiseChip();
   // Alerts remain below the controls overlay.
   makeLinkOverlay(scr);
   refreshLinkOverlay(true);
@@ -1517,7 +1566,15 @@ static void showDashboard() {
 
 static void deliverLoggingNotice(StatusNotice notice) {
   if (notice == NOTICE_NONE) return;
-  if (currentScreen == SCREEN_DASHBOARD && !rebuildQueued)
+  // The dashboard is the usual home for a toast, but the profile and cruise
+  // pages are where these outcomes are triggered. Delivering there only when
+  // no rebuild is pending keeps the toast from being created on a screen that
+  // is about to be deleted, while still showing CONFIRMED/FAILED and the
+  // cruise state without waiting for a screen change.
+  const bool staysOnScreen =
+      currentScreen == SCREEN_SUBMENU &&
+      (submenuType == SUBMENU_PROFILES || submenuType == SUBMENU_CRUISE);
+  if (!rebuildQueued && (currentScreen == SCREEN_DASHBOARD || staysOnScreen))
     showStatusNotice(notice);
   else
     queueStatusNotice(notice);
@@ -1575,6 +1632,10 @@ static void observeProfileWriteNotices() {
   StatusNotice notice = NOTICE_NONE;
   if (report.status == VESC_PROFILE_WRITE_CONFIRMED &&
       lastProfileWriteReport.status != VESC_PROFILE_WRITE_CONFIRMED) {
+    // The controller's read-back now matches the slot, so this is the profile a
+    // boot or reconnect may replay. Recorded only here, and only once per
+    // transition: a failed write leaves the previous mark alone.
+    if (report.index < kControllerProfileCount) markControllerProfileApplied(report.index);
     notice = NOTICE_PROFILE_WRITE_CONFIRMED;
   } else if (report.status == VESC_PROFILE_WRITE_FAILED &&
              lastProfileWriteReport.status != VESC_PROFILE_WRITE_FAILED) {
@@ -1632,6 +1693,7 @@ void uiDashboardTick() {
     const DashboardValues values = snapshot.link == LINK_LIVE ? snapshot.values : DashboardValues{};
     setDashboardTelemetryFields(snapshot.available);
     updateDashboard(values);
+    refreshCruiseChip();
     refreshLinkOverlay(false);
     refreshDashboardLoggingControl();
   } else if (currentScreen == SCREEN_SUBMENU && submenuType == SUBMENU_LOGGING && !rebuildQueued) {
@@ -2414,6 +2476,10 @@ static const char *statusNoticeText(StatusNotice notice) {
     case NOTICE_CRUISE_BRAKE:
       return txt("CRUISE OFF — BRAKE", "VAKIONOPEUS POIS — JARRU", "TEMPOMAT AUS — BREMSE",
                  "RÉGULATEUR OFF — FREIN", "CRUCERO OFF — FRENO", "CRUISE OFF — FRENO");
+    case NOTICE_CRUISE_FAILED:
+      return txt("CONTROLLER REJECTED CRUISE", "OHJAIN HYLVÄSI VAKIONOPEUDEN",
+                 "CONTROLLER LEHNTE TEMPOMAT AB", "RÉGULATEUR REFUSÉ PAR LE CONTRÔLEUR",
+                 "EL CONTROLADOR RECHAZÓ EL CRUCERO", "CONTROLLER HA RIFIUTATO IL CRUISE");
     case NOTICE_PROFILE_APPLIED:
       // The write is confirmed by the read-back on the page, so the toast reports
       // what the display has done, not what the controller is assumed to have
@@ -2429,6 +2495,14 @@ static const char *statusNoticeText(StatusNotice notice) {
     case NOTICE_PROFILE_WRITE_FAILED:
       return txt("PROFILE WRITE FAILED", "PROFIILIEN KIRJOITUS EPÄONNISTUI", "PROFIL-SCHREIBEN FEHLGESCHLAGEN",
                  "ÉCRITURE PROFIL ÉCHOUEE", "ESCRITURA DE PERFIL FALLÓ", "SCRITTURA PROFILO FALLITA");
+    case NOTICE_PROFILE_ECO:
+      return txt("ECO PROFILE", "ECO-PROFIILI", "ECO-PROFIL", "PROFIL ECO", "PERFIL ECO", "PROFILO ECO");
+    case NOTICE_PROFILE_DRIVE:
+      return txt("DRIVE PROFILE", "DRIVE-PROFIILI", "DRIVE-PROFIL", "PROFIL DRIVE", "PERFIL DRIVE",
+                 "PROFILO DRIVE");
+    case NOTICE_PROFILE_SPORT:
+      return txt("SPORT PROFILE", "SPORT-PROFIILI", "SPORT-PROFIL", "PROFIL SPORT", "PERFIL SPORT",
+                 "PROFILO SPORT");
     default:
       return "";
   }
@@ -2438,7 +2512,8 @@ static bool statusNoticeIsWarning(StatusNotice notice) {
   return notice == NOTICE_SD_CARD_REMOVED || notice == NOTICE_SD_CARD_REMOVED_RECORDING ||
          notice == NOTICE_SD_WRITE_FAILED || notice == NOTICE_SD_CARD_NOT_READY ||
          notice == NOTICE_VESC_OFFLINE_SAVED || notice == NOTICE_RESTART_DISPLAY_TO_APPLY ||
-         notice == NOTICE_LIGHT_SENSOR_RANGE_TOO_SMALL || notice == NOTICE_PROFILE_WRITE_FAILED;
+         notice == NOTICE_LIGHT_SENSOR_RANGE_TOO_SMALL || notice == NOTICE_PROFILE_WRITE_FAILED ||
+         notice == NOTICE_CRUISE_FAILED;
 }
 
 static void statusToastDeleteCb(lv_event_t *) {
@@ -2509,6 +2584,15 @@ static void showPendingStatusNotice() {
   const StatusNotice notice = pendingStatusNotice;
   pendingStatusNotice = NOTICE_NONE;
   showStatusNotice(notice);
+}
+
+void uiNotifyProfileChanged(uint8_t index) {
+  static const StatusNotice notices[] = {NOTICE_PROFILE_ECO, NOTICE_PROFILE_DRIVE, NOTICE_PROFILE_SPORT};
+  if (index >= kControllerProfileCount) return;
+  if (currentScreen == SCREEN_DASHBOARD && !rebuildQueued)
+    showStatusNotice(notices[index]);
+  else
+    queueStatusNotice(notices[index]);
 }
 
 static void showDeveloperStatusToast(bool alreadyEnabled) {
@@ -3051,21 +3135,31 @@ static void observeCruiseState() {
     case CRUISE_OUTCOME_BLOCKED_MODE: notice = NOTICE_CRUISE_MODE_BLOCKED; break;
     case CRUISE_OUTCOME_BLOCKED_GEARING: notice = NOTICE_CRUISE_GEARING; break;
     case CRUISE_OUTCOME_RELEASED_BRAKE: notice = NOTICE_CRUISE_BRAKE; break;
+    case CRUISE_OUTCOME_FAILED: notice = NOTICE_CRUISE_FAILED; break;
     case CRUISE_OUTCOME_RELEASED_CANCEL: notice = NOTICE_CRUISE_CANCELLED; break;
     default: break;  // fault / link / speed / disabled: the dashboard shows those
   }
-  if (notice != NOTICE_NONE) deliverLoggingNotice(notice);
-
   const bool active = state == CRUISE_STATE_ACTIVE;
+  const bool stateChanged = cruiseStateKnown && active != cruiseReportedActive;
+  const bool rebuildNeeded =
+      stateChanged && currentScreen == SCREEN_SUBMENU && submenuType == SUBMENU_CRUISE && !rebuildQueued;
+
+  // A state change rebuilds the cruise page, which deletes the toast it was
+  // just created on. Queue the message in that case so loadScreen() delivers it
+  // on the rebuilt page instead of losing it.
+  if (notice != NOTICE_NONE) {
+    if (rebuildNeeded) queueStatusNotice(notice);
+    else deliverLoggingNotice(notice);
+  }
+
   if (!cruiseStateKnown) {
     cruiseStateKnown = true;
     cruiseReportedActive = active;
     return;
   }
-  if (active == cruiseReportedActive) return;
+  if (!stateChanged) return;
   cruiseReportedActive = active;
-  if (currentScreen == SCREEN_SUBMENU && submenuType == SUBMENU_CRUISE && !rebuildQueued)
-    queueLowMemoryRebuild(SCREEN_SUBMENU);
+  if (rebuildNeeded) queueLowMemoryRebuild(SCREEN_SUBMENU);
 }
 
 static lv_obj_t *makeMenuTopBar(lv_obj_t *scr, const char *title, uint8_t pageNumber, uint8_t pageCount,
@@ -6282,22 +6376,31 @@ static void showSubmenu() {
     makeMenuTopBar(scr, vehicleSectionTitle(SUBMENU_PROFILES), profilePage + 1, submenuItemCount(), true);
     if (profilePage == 0) {
       // Slots: which profile the values page edits, and which the dashboard
-      // badge names. The badge colour is the profile's own.
+      // badge names. The badge colour is the profile's own. Selection and
+      // application are different states: tapping a slot only chooses what the
+      // editor follows, while APPLY writes it. Naming both stops a rider
+      // thinking a tap already reached the controller.
       for (uint8_t i = 0; i < kControllerProfileCount; ++i) {
-        const char *status = activeControllerProfile == i
-                                 ? txt("Selected", "Valittu", "Gewählt", "Sélectionné", "Elegido", "Scelto")
-                                 : txt("Tap to select", "Valitse", "Zum Wählen", "Choisir", "Elegir", "Scegli");
+        const char *status =
+            activeControllerProfile == i && appliedControllerProfile == i
+                ? txt("Applied", "Käytössä", "Angewandt", "Appliqué", "Aplicado", "Applicato")
+            : activeControllerProfile == i
+                ? txt("Selected", "Valittu", "Gewählt", "Sélectionné", "Elegido", "Scelto")
+            : appliedControllerProfile == i
+                ? txt("On controller", "Ohjaimessa", "Im Controller", "Sur le contrôleur",
+                      "En el controlador", "Nel controller")
+                : txt("Tap to select", "Valitse", "Zum Wählen", "Choisir", "Elegir", "Scegli");
         makeMenuButton(scr, i % 2 ? kTwoColRightX : kMenuEdgeX, 48 + (i / 2) * 60,
                        i % 2 ? kTwoColRightW : kTwoColLeftW, 54, controllerProfileName(i), status,
                        activeControllerProfile == i, BTN_OPTION_BASE + i);
       }
       makeExplanationAt(scr, 168,
-                        txt("Select a profile, set its limits, then apply it on the last page.",
-                            "Valitse profiili, aseta rajat ja käytä se viimeisellä sivulla.",
-                            "Profil wählen, Limits setzen, dann auf der letzten Seite anwenden.",
-                            "Choisissez un profil, réglez les limites, appliquez-le en dernière page.",
-                            "Elige un perfil, fija los límites y aplícalo en la última página.",
-                            "Scegli un profilo, imposta i limiti, applicalo nell'ultima pagina."));
+                        txt("Selected is local. Set the limits, then APPLY to write them.",
+                            "Valinta on paikallinen. Aseta rajat ja kirjoita ne KÄYTÄ-painikkeella.",
+                            "Auswahl ist lokal. Limits setzen, dann ANWENDEN schreibt sie.",
+                            "La sélection est locale. Réglez puis APPLIQUEZ pour écrire.",
+                            "La selección es local. Ajusta y APLICA para escribir.",
+                            "La selezione è locale. Imposta i limiti, poi APPLICA per scrivere."));
     } else if (profilePage == 1) {
       // One grid: every value a profile stores goes to the controller, so there
       // is nothing to separate out. Six tiles take two rows of three.
@@ -6315,13 +6418,14 @@ static void showSubmenu() {
       // labelled CTRL in a language-neutral line, the way a gauge reads. Only the
       // fields a profile owns are shown, so the line cannot report a limit the
       // profile never set.
-      if (vescLiveProfileValid) {
+      VescMcconfTemp liveProfile = {};
+      if (controllerProfileReadBack(liveProfile)) {
         const float rpmPerKmh = drivetrainRpmPerKmh();
         char ctrl[64];
         snprintf(ctrl, sizeof(ctrl), "CTRL  %u km/h   %u%%   %u A",
-                 (unsigned)vescProfileSpeedFromErpm((int32_t)vescLiveProfile.maxErpm, rpmPerKmh),
-                 (unsigned)vescProfileScalePercent(vescLiveProfile.currentMaxScale),
-                 (unsigned)lroundf(vescLiveProfile.inCurrentMax));
+                 (unsigned)vescProfileSpeedFromErpm((int32_t)liveProfile.maxErpm, rpmPerKmh),
+                 (unsigned)vescProfileScalePercent(liveProfile.currentMaxScale),
+                 (unsigned)lroundf(liveProfile.inCurrentMax));
         makeExplanationAt(scr, 166, ctrl);
       } else {
         makeExplanationAt(scr, 166,
@@ -8723,7 +8827,7 @@ void uiPreviewShowLoggingNotice(uint8_t variant) {
 void uiPreviewShowControllerNotice(uint8_t variant) {
   static const StatusNotice notices[] = {
       NOTICE_VESC_PROFILE_SAVED, NOTICE_VESC_OFFLINE_SAVED, NOTICE_RESTART_DISPLAY_TO_APPLY,
-      NOTICE_CONTROLLER_SETUP_APPLIED,
+      NOTICE_CONTROLLER_SETUP_APPLIED, NOTICE_CRUISE_FAILED,
   };
   showStatusNotice(notices[constrain((int)variant, 0, (int)(sizeof(notices) / sizeof(notices[0])) - 1)]);
   if (statusToast) {

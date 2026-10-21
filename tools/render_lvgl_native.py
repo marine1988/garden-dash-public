@@ -30,8 +30,9 @@ NAMES = [
     "10_trace",
     "11_minimal_ride",
     "12_efficiency",
-    # Extra Motor Data states. They stay after the twelve dashboards so that
+    # Extra dashboard states stay after the twelve themes so that
     # DASHBOARD_NAMES = NAMES[:12] keeps meaning "one capture per theme".
+    "01_cyber_hud_cruise",
     "05_motor_data_rebuild",
     "05_motor_data_missing",
     "05_motor_data_high",
@@ -70,6 +71,7 @@ NAMES = [
     "11_controller_offline_notice",
     "11_controller_restart_notice",
     "11_controller_setup_saved_notice",
+    "11_cruise_rejected_notice",
     "11_controller_settings",
     "11_controller_settings_fardriver",
     "11_controller_setup",

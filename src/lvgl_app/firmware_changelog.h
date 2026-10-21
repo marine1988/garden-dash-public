@@ -16,6 +16,11 @@ struct FirmwareChangelogEntry {
 
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
+        "2026-10-21",
+        "Profile and cruise fixes",
+        "Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.",
+    },
+    {
         "2026-10-14",
         "VESC link on one connector",
         "A garden_usb build puts the VESC link on the power header's TX/RX: one cable, no log.",
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-13",
         "Garden rename",
         "The project, firmware and display are now Garden-Dash and GARDEN DASH.",
-    },
-    {
-        "2026-10-13",
-        "Eco, Drive and Sport",
-        "Three named profile slots, with a coloured badge on the dashboard.",
     },
 };
 

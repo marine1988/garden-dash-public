@@ -189,6 +189,12 @@ int main(int argc, char **argv) {
     cyd::preview::initRuntime();
 
     if (selected("01_cyber_hud")) { showDashboard(output, MODE_HUD, "01_cyber_hud"); if (stopAfterSelected()) return 0; }
+    if (selected("01_cyber_hud_cruise")) {
+      previewSetCruiseState(true, 25);
+      showDashboard(output, MODE_HUD, "01_cyber_hud_cruise");
+      previewSetCruiseState(false, 0);
+      if (stopAfterSelected()) return 0;
+    }
     if (selected("02_dual_gauge")) { showDashboard(output, MODE_GAUGE, "02_dual_gauge"); if (stopAfterSelected()) return 0; }
     if (selected("02_dual_gauge_range_transition")) {
       showGaugeRangeTransition(output, MODE_GAUGE, "02_dual_gauge_range_transition");
@@ -324,6 +330,11 @@ int main(int argc, char **argv) {
       uiPreviewSetSettingsCategory(2); uiShow(SCREEN_MENU);
       uiPreviewShowControllerNotice(2);
       capture(output, "11_controller_restart_notice"); if (stopAfterSelected()) return 0;
+    }
+    if (selected("11_cruise_rejected_notice")) {
+      showRestingDashboard();
+      uiPreviewShowControllerNotice(4);
+      capture(output, "11_cruise_rejected_notice"); if (stopAfterSelected()) return 0;
     }
     if (selected("11_controller_setup_saved_notice")) {
       showRestingDashboard();
@@ -872,10 +883,13 @@ int main(int argc, char **argv) {
       if (stopAfterSelected()) return 0;
     }
     if (selected("34_profiles_slots")) {
-      // Eco selected, so the page shows one chosen slot and two waiting ones --
-      // and the dashboard badge has something to name.
+      // One slot of each state: Eco is written to the controller, Drive is
+      // only selected for editing, and Sport is still waiting. This is the
+      // page that explains the difference between a tap and APPLY.
       for (uint8_t i = 0; i < kControllerProfileCount; ++i) resetControllerProfile(i);
       applyControllerProfile(0);
+      markControllerProfileApplied(0);
+      applyControllerProfile(1);
       saveAppSettings();
       showSubmenu(output, SUBMENU_PROFILES, 0, false, "34_profiles_slots");
       if (stopAfterSelected()) return 0;

@@ -19,6 +19,7 @@
 
 
 #include "config.h"
+#include "garden_log.h"
 #include "garden_splash_generated.h"
 #include "lvgl_app/app_state.h"
 #include "lvgl_app/controller_manager.h"
@@ -187,7 +188,7 @@ static void setupThemeRgbLed() {
   if (RGB_LED_GREEN_AVAILABLE) setupRgbLedChannel(RGB_LED_GREEN_PWM_CHANNEL, CYD_RGB_LED_GREEN_PIN);
   if (RGB_LED_BLUE_AVAILABLE) setupRgbLedChannel(RGB_LED_BLUE_PWM_CHANNEL, CYD_RGB_LED_BLUE_PIN);
   if (!RGB_LED_GREEN_AVAILABLE || !RGB_LED_BLUE_AVAILABLE) {
-    Serial.println("CYD RGB LED: green/blue channels unavailable because they conflict with configured VESC UART pins");
+    gardenLog("CYD RGB LED: green/blue channels unavailable because they conflict with configured VESC UART pins");
   }
 }
 
@@ -282,7 +283,7 @@ static void servicePerformanceLog() {
   const uint32_t flushAvgUs = perfFlushCount ? perfFlushWaitSubmitUs / perfFlushCount : 0;
   const uint32_t flushesPerSecond = windowMs ? (uint64_t)perfFlushCount * 1000 / windowMs : 0;
   const uint32_t pixelsPerSecond = windowMs ? perfFlushPixels * 1000 / windowMs : 0;
-  Serial.printf("LVGL perf screen=%u mode=%u handler_us(avg/max)=%u/%u flush_s=%u pixels_s=%u flush_wait_us=%u\n",
+  gardenLogf("LVGL perf screen=%u mode=%u handler_us(avg/max)=%u/%u flush_s=%u pixels_s=%u flush_wait_us=%u\n",
                 (unsigned)uiCurrentScreen(), (unsigned)dashboardMode, handlerAvgUs, perfHandlerMaxUs,
                 flushesPerSecond, pixelsPerSecond, flushAvgUs);
 
@@ -363,7 +364,7 @@ static void writeDisplayPanelTuning() {
   } else {
     writeDisplayRegister(0xC5, kIli2Vcom, sizeof(kIli2Vcom));
   }
-  Serial.printf("CYD panel tuning: %s\n", displayPanelTuningName(preset));
+  gardenLogf("CYD panel tuning: %s\n", displayPanelTuningName(preset));
 }
 
 // The original single-USB CYD and several later dual-USB batches expose the
@@ -386,7 +387,7 @@ void applyDisplayPanelProfile() {
   writeDisplayPanelTuning();  // selects the tuning's gamma curve last
 
   if (lvglStarted) tft.startWrite();
-  Serial.printf("CYD panel profile: %s\n", alternate ? "alternate/inverted" : "standard");
+  gardenLogf("CYD panel profile: %s\n", alternate ? "alternate/inverted" : "standard");
 }
 
 void applyDisplayPanelTuning() {
@@ -446,7 +447,7 @@ void autoDetectDisplayPanelProfile(bool force) {
 
   saveDisplayPanelProfile();
   if (force) applyDisplayPanelProfile();
-  Serial.printf("CYD panel auto-detected: %s (D3 %08lX, 04 %08lX)\n",
+  gardenLogf("CYD panel auto-detected: %s (D3 %08lX, 04 %08lX)\n",
                 displayPanelProfile == DISPLAY_PANEL_ALTERNATE ? "alternate/ST7789" : "standard/ILI9341",
                 (unsigned long)displayIdD3, (unsigned long)displayId04);
 }
@@ -471,7 +472,7 @@ static void probeDisplayController() {
   char panel[48];
   displayModuleInfo(module, sizeof(module));
   displayControllerInfo(panel, sizeof(panel));
-  Serial.printf("CYD hardware: %s | TFT %s\n", module, panel);
+  gardenLogf("CYD hardware: %s | TFT %s\n", module, panel);
 }
 
 static bool touchCalibrationPlausible(const TouchCalibration &cal) {
@@ -516,7 +517,7 @@ static void loadTouchCalibration() {
   touchCal.valid = touchPrefs.getBool("valid", false);
   touchPrefs.end();
   if (!touchCalibrationPlausible(touchCal)) {
-    Serial.println("Saved touch calibration is missing or implausible; using factory mapping until calibrated");
+    gardenLog("Saved touch calibration is missing or implausible; using factory mapping until calibrated");
     touchCal = defaultTouchCal;
   }
 }
@@ -667,7 +668,7 @@ bool runTouchCalibration() {
   };
   auto calibrationFailed = [&](const char *reason) {
     touchCal = previous;
-    Serial.printf("Touch calibration rejected: %s\n", reason);
+    gardenLogf("Touch calibration rejected: %s\n", reason);
     tft.fillScreen(TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(0xFBE0, TFT_BLACK);
@@ -753,8 +754,8 @@ bool runTouchCalibration() {
   touchCal.valid = true;
   saveTouchCalibration();
 
-  Serial.println("Touch calibration saved:");
-  Serial.printf("xAxis=%u, xMin=%u, xMax=%u, yAxis=%u, yMin=%u, yMax=%u\n", touchCal.xAxis, touchCal.xMin,
+  gardenLog("Touch calibration saved:");
+  gardenLogf("xAxis=%u, xMin=%u, xMax=%u, yAxis=%u, yMin=%u, yMax=%u\n", touchCal.xAxis, touchCal.xMin,
                 touchCal.xMax, touchCal.yAxis, touchCal.yMin, touchCal.yMax);
 
   tft.fillScreen(TFT_BLACK);
@@ -1182,7 +1183,7 @@ void setup() {
   // until setup has completed and the LVGL loop has remained healthy.
   firmwareUpdateBootValidationBegin();
 
-  Serial.println("LVGL firmware ready");
+  gardenLog("LVGL firmware ready");
 }
 
 void loop() {

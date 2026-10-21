@@ -2,6 +2,7 @@
 
 #include "controller_manager.h"
 #include "gauge_range_visual.h"
+#include "screens.h"
 #include "ui_common.h"
 #include "ui_style.h"
 
@@ -4817,17 +4818,48 @@ void applyDashboardGradient(lv_obj_t *scr) {
   }
 }
 
+static uint16_t profileBadgeColor(uint8_t index) {
+  if (index == 0) return 0x07E0;   // green
+  if (index == 1) return 0xFFE0;   // amber
+  if (index == 2) return 0xF800;   // red
+  return 0x7BEF;                    // neutral: no profile selected yet
+}
+
+static void applyProfileBadgeVisual(lv_obj_t *box, uint8_t index) {
+  lv_obj_t *label = lv_obj_get_child(box, 0);
+  const bool selected = index < kControllerProfileCount;
+  lv_obj_set_style_bg_color(box, dash565(profileBadgeColor(index)), 0);
+  if (!label) return;
+  lv_label_set_text(label, selected ? controllerProfileLetter(index) : "P");
+  lv_obj_set_style_text_color(label, lv_color_black(), 0);
+}
+
+// A tap on the badge cycles Eco -> Drive -> Sport -> Eco. This is a deliberate
+// dashboard shortcut, so it both selects and queues the write: the rider does
+// not have to open three menu pages just to change the limit. The badge updates
+// immediately; the normal CONFIRMED/FAILED notice follows from the backend.
+static void profileBadgeClicked(lv_event_t *event) {
+  lv_event_stop_bubbling(event);
+  lv_obj_t *box = lv_event_get_target(event);
+  const uint8_t next =
+      activeControllerProfile < kControllerProfileCount
+          ? (uint8_t)((activeControllerProfile + 1) % kControllerProfileCount)
+          : 0;
+  applyControllerProfile(next);
+  controllerProfileWrite(next);
+  applyProfileBadgeVisual(box, next);
+  uiNotifyProfileChanged(next);
+}
+
 // The selected ride profile as a one-letter badge: green E for Eco, amber D for
-// Drive, red S for Sport. It is not part of any theme's layout, so it is drawn
-// once, after the theme builds. The placement is per-theme because the themes
-// fill the top strip differently: most leave a gap between the clock and the
-// title, the panel-based ones put their furniture elsewhere, and a badge that
-// covers a battery percentage or a panel border is worse than no badge.
+// Drive, red S for Sport, or a neutral P before anything has been chosen. It is
+// not part of any theme's layout, so it is drawn once, after the theme builds.
+// The placement is per-theme because the themes fill the top strip differently:
+// most leave a gap between the clock and the title, the panel-based ones put
+// their furniture elsewhere, and a badge that covers a battery percentage or a
+// panel border is worse than no badge. The whole badge is also the dashboard's
+// profile shortcut.
 static void buildProfileBadge(lv_obj_t *scr) {
-  if (activeControllerProfile >= kControllerProfileCount) return;  // nothing selected
-  const uint16_t color565 = activeControllerProfile == 0 ? 0x07E0   // green
-                            : activeControllerProfile == 1 ? 0xFFE0  // amber
-                                                           : 0xF800; // red
   int x = 85, y = 3;  // the gap between the clock and the title
   switch (dashboardMode) {
     case MODE_BARS:        x = 201; y = 20; break;  // clear space in the battery panel
@@ -4841,15 +4873,17 @@ static void buildProfileBadge(lv_obj_t *scr) {
   lv_obj_set_pos(box, x, y);
   lv_obj_set_size(box, 22, 22);
   lv_obj_set_style_radius(box, 4, 0);
-  lv_obj_set_style_bg_color(box, dash565(color565), 0);
   lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_opa(box, LV_OPA_70, LV_STATE_PRESSED);
   lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(box, 6);
+  lv_obj_add_event_cb(box, profileBadgeClicked, LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *label = lv_label_create(box);
-  lv_label_set_text(label, controllerProfileLetter(activeControllerProfile));
-  lv_obj_set_style_text_color(label, lv_color_black(), 0);
   lv_obj_set_style_text_font(label, &lv_font_rajdhani_16, 0);
   lv_obj_center(label);
+  applyProfileBadgeVisual(box, activeControllerProfile);
 }
 
 void buildDashboardMode(lv_obj_t *scr, DashboardMode mode, const DashboardValues &values) {

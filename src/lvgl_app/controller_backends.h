@@ -24,12 +24,15 @@ bool vescCruiseActive(uint16_t &targetKmh);
 void vescCruiseOutcome(CruiseOutcome &outcome, CruiseState &state);
 
 // Profile writes, driven from the telemetry task for the same reason. The UI
-// leaves the slot number; the task reads the controller's current limits,
-// writes the profile's speed and current limits (store=0, so nothing reaches the
-// controller's flash), sets field weakening over LispBM, then reads the limits
-// back and reports whether they match. The UI polls vescProfileWriteReportGet().
+// leaves the slot number; the task snapshots it, writes the whole profile as
+// one LispBM expression (conf-set applies in RAM, so nothing reaches the
+// controller's flash), then reads the limits back and reports whether they
+// match. The UI polls vescProfileWriteReportGet().
 void vescProfileRequestWrite(uint8_t index);
 VescProfileWriteReport vescProfileWriteReportGet();
+// Copies the last controller read-back under the same lock the telemetry task
+// writes it with. False when no valid reply has been seen for this link.
+bool vescProfileReadBackCopy(VescMcconfTemp &out);
 
 void farDriverBackendBegin();
 void farDriverBackendStop();

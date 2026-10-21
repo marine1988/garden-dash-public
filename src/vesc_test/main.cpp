@@ -25,6 +25,7 @@ bool rideMode = true;
 uint32_t rideMs = 0;
 fake_vesc::Sample cycleSample = fake_vesc::kStationary;
 fake_vesc::Totals totals = {};
+fake_vesc::ControllerState controller;
 float ampHours = 0, ampHoursCharged = 0, wattHours = 0, wattHoursCharged = 0, tachometer = 0, distanceMm = 0;
 uint32_t lastPaintMs = 0;
 char deviceName[30];
@@ -81,38 +82,56 @@ void invertPanel() {
   }
 }
 void button(int x, int y, const char *label) {
-  tft.fillRoundRect(x, y, 150, 42, 5, TFT_DARKGREY);
-  tft.drawRoundRect(x, y, 150, 42, 5, TFT_ORANGE);
+  tft.fillRoundRect(x, y, 150, 34, 5, TFT_DARKGREY);
+  tft.drawRoundRect(x, y, 150, 34, 5, TFT_ORANGE);
   tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-  tft.drawCentreString(label, x + 75, y + 13, 2);
+  tft.drawCentreString(label, x + 75, y + 9, 2);
+}
+unsigned scalePercent(float scale) {
+  if (!(scale > 0.0F)) return 0;  // also catches NaN
+  if (scale >= 1.0F) return 100;
+  return unsigned(scale * 100.0F + 0.5F);
 }
 void paint() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-  tft.drawCentreString("FAKE VESC - TEST ONLY", 160, 4, 2);
+  tft.drawCentreString("FAKE VESC - TEST ONLY", 160, 2, 2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawCentreString(deviceName, 160, 25, 2);
+  tft.drawCentreString(deviceName, 160, 20, 2);
   tft.setTextColor(connected.load() ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
   tft.drawCentreString(!connected.load() ? "Advertising - select on receiver" :
       !subscribed.load() ? "Connected - awaiting subscription" :
-      responding ? "CONNECTED / ANSWERING" : "CONNECTED / IGNORING", 160, 48, 2);
+      responding ? "CONNECTED / ANSWERING" : "CONNECTED / IGNORING", 160, 38, 2);
   char line[72];
   snprintf(line, sizeof(line), "req %lu | replies %lu | ignored %lu | bad %lu",
            (unsigned long)requests.load(), (unsigned long)replies.load(),
            (unsigned long)ignoredRequests.load(), (unsigned long)badRequests.load());
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawCentreString(line, 160, 72, 2);
+  tft.drawCentreString(line, 160, 56, 2);
   snprintf(line, sizeof(line), "%u s | %.1f V | %.1f A | eRPM %ld", unsigned(rideMs / 1000),
            cycleSample.voltageDeci / 10.0, cycleSample.inputCurrentCenti / 100.0,
            (long)cycleSample.erpm);
-  tft.drawCentreString(line, 160, 94, 2);
-  button(6, 120, responding ? "STOP ANSWERING" : "START ANSWERING");
-  button(164, 120, setupValues ? "SETUP VALS: ON" : "SETUP VALS: OFF");
+  tft.drawCentreString(line, 160, 74, 2);
+  tft.setTextColor(controller.cruiseHeld ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
+  if (controller.cruiseHeld) snprintf(line, sizeof(line), "CRUISE ON %ld", (long)controller.cruiseErpm);
+  else snprintf(line, sizeof(line), "CRUISE OFF");
+  tft.drawCentreString(line, 160, 92, 2);
+  // The profile shadow: what conf-set actually applied, not what the display
+  // last asked for. Percentages and eRPM match the receiver's own units.
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  snprintf(line, sizeof(line), "P eRPM %ld | max %u%% | min %u%%", (long)controller.maxErpm,
+           scalePercent(controller.currentMaxScale), scalePercent(controller.currentMinScale));
+  tft.drawCentreString(line, 160, 110, 1);
+  snprintf(line, sizeof(line), "P fw %ldA | motor %ldA | batt %ldA", (long)controller.fieldWeakeningAmps,
+           (long)controller.motorAmps, (long)controller.batteryAmps);
+  tft.drawCentreString(line, 160, 120, 1);
+  button(6, 132, responding ? "STOP ANSWERING" : "START ANSWERING");
+  button(164, 132, setupValues ? "SETUP VALS: ON" : "SETUP VALS: OFF");
   button(6, 170, "DISCONNECT");
   button(164, 170, "INVERT COLORS");
-  tft.drawRoundRect(6, 215, 308, 24, 4, TFT_ORANGE);
+  tft.drawRoundRect(6, 208, 308, 28, 4, TFT_ORANGE);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawCentreString(rideMode ? "MODE: RIDE SEQUENCE  (tap)" : "MODE: STATIONARY  (tap)", 160, 219, 2);
+  tft.drawCentreString(rideMode ? "MODE: RIDE SEQUENCE  (tap)" : "MODE: STATIONARY  (tap)", 160, 214, 2);
 }
 void resetTotals() {
   ampHours = ampHoursCharged = wattHours = wattHoursCharged = tachometer = distanceMm = 0;
@@ -157,7 +176,13 @@ void sendFrame(const uint8_t *frame, size_t length) {
   replies.fetch_add(1);
 }
 
-void answer(uint8_t command) {
+void clearController() {
+  controller.reset();
+  redraw = true;
+  Serial.println("CONTROLLER STATE CLEARED (profile + cruise)");
+}
+
+void answer(uint8_t command, const uint8_t *payload, size_t payloadLength) {
   uint8_t frame[80];
   size_t length = 0;
   switch (command) {
@@ -171,12 +196,20 @@ void answer(uint8_t command) {
     case fake_vesc::kCommandFwVersion:
       length = fake_vesc::makeFwVersionFrame(frame, sizeof(frame));
       break;
-    case fake_vesc::kCommandLispReplCmd:
-      // The display sends profile writes and cruise commands as LispBM
-      // expressions. Simulate the REPL: parse the expression, apply conf-set
-      // fields to a shadow store, and reply "OK" so the read-back passes.
-      length = fake_vesc::makeLispReplyFrame(frame, sizeof(frame), "OK");
+    case fake_vesc::kCommandGetMcconfTemp:
+      length = fake_vesc::makeMcconfTempFrame(frame, sizeof(frame), controller.mcconf);
       break;
+    case fake_vesc::kCommandLispReplCmd: {
+      const char *reply = "ERR";
+      // The payload after the command id is the expression plus its NUL. A
+      // missing terminator is malformed, not a reason to read past the frame.
+      if (payload && payloadLength >= 2 && memchr(payload + 1, '\0', payloadLength - 1)) {
+        reply = controller.applyLisp((const char *)(payload + 1), cycleSample.erpm,
+                                     cycleSample.speedMmPerS);
+      }
+      length = fake_vesc::makeLispReplyFrame(frame, sizeof(frame), reply);
+      break;
+    }
     default:
       // A real VESC also stays silent for commands it does not implement.
       ignoredRequests.fetch_add(1);
@@ -185,9 +218,12 @@ void answer(uint8_t command) {
   if (length) sendFrame(frame, length);
 }
 
-// The receiver writes one short request per poll, but a write can still be
-// split, so requests are reassembled rather than assumed whole.
-uint8_t requestBuffer[64];
+// The receiver writes one short request per poll, but a profile write is one
+// ~200-byte LispBM expression plus framing. 64 bytes rejected it before it could
+// be parsed; 512 also leave room for a partially received frame plus the largest
+// BLE write (244 bytes), so a large write is never dropped on arrival.
+constexpr size_t kRequestBufferSize = 512;
+uint8_t requestBuffer[kRequestBufferSize];
 size_t requestUsed = 0;
 
 void consumeRequests() {
@@ -213,15 +249,20 @@ void consumeRequests() {
     const bool valid = payload[length + 2] == 3 && fake_vesc::crc16(payload, length) == crc;
     if (valid) {
       requests.fetch_add(1);
-      // COMM_FORWARD_CAN wraps the real command: id, CAN id, command.
-      const uint8_t command = payload[0] == fake_vesc::kCommandForwardCan && length >= 3 ? payload[2] : payload[0];
-      if (responding) answer(command);
+      // COMM_FORWARD_CAN wraps the real command. Unwrap before dispatch so the
+      // Lisp path sees the inner payload (which starts at payload + 2) and not
+      // the CAN wrapper around it.
+      const fake_vesc::RequestView request = fake_vesc::unwrapCanForward(payload, length);
+      if (responding && request.length > 0) answer(request.payload[0], request.payload, request.length);
       else ignoredRequests.fetch_add(1);
+      memmove(requestBuffer, requestBuffer + total, requestUsed - total);
+      requestUsed -= total;
     } else {
+      // Drop only the false start byte and rescan, so a corrupted packet does
+      // not take a valid frame that follows it down with it.
       badRequests.fetch_add(1);
+      memmove(requestBuffer, requestBuffer + 1, --requestUsed);
     }
-    memmove(requestBuffer, requestBuffer + total, requestUsed - total);
-    requestUsed -= total;
   }
 }
 
@@ -252,10 +293,16 @@ class NotifyCallbacks : public NimBLECharacteristicCallbacks {
 class ReceiveCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &) override {
     const std::string value = characteristic->getValue();
+    if (value.empty()) return;
     if (value.size() > sizeof(requestBuffer)) { badRequests.fetch_add(1); return; }
     if (requestUsed + value.size() > sizeof(requestBuffer)) {
+      // A partial frame that cannot coexist with this write is stale. Drop only
+      // the oldest bytes needed, keeping the new write intact; the resync in
+      // consumeRequests finds the start of its frame.
+      const size_t drop = requestUsed + value.size() - sizeof(requestBuffer);
+      memmove(requestBuffer, requestBuffer + drop, requestUsed - drop);
+      requestUsed -= drop;
       badRequests.fetch_add(1);
-      requestUsed = 0;  // nothing this long is a request of ours
     }
     memcpy(requestBuffer + requestUsed, value.data(), value.size());
     requestUsed += value.size();
@@ -311,7 +358,7 @@ void setup() {
   advertising->addServiceUUID(kService);
   advertising->enableScanResponse(true);
   if (!NimBLEDevice::startAdvertising()) Serial.println("ERROR: advertising could not start");
-  Serial.printf("%s ready. Serial: s=answer/ignore v=setup values d=disconnect i=invert m=mode\n", deviceName);
+  Serial.printf("%s ready. Serial: s=answer/ignore v=setup values d=disconnect i=invert m=mode c=clear profile+cruise\n", deviceName);
 }
 
 void loop() {
@@ -324,10 +371,11 @@ void loop() {
     requests = 0; replies = 0; ignoredRequests = 0; badRequests = 0;
     rideMs = 0;
     resetTotals();
+    controller.reset();
     redraw = true;
   }
   if (connected.load() && rideMode) rideMs = (rideMs + elapsed) % fake_vesc::kRideDurationMs;
-  cycleSample = rideMode ? fake_vesc::rideSample(rideMs) : fake_vesc::kStationary;
+  cycleSample = controller.applyCruise(rideMode ? fake_vesc::rideSample(rideMs) : fake_vesc::kStationary);
   // Charge, energy, distance and the tachometer count up the way a real
   // controller's do, so the receiver's trip and battery maths see a plausible
   // series rather than a value that jumps backwards every ride cycle.
@@ -356,11 +404,11 @@ void loop() {
   int x, y;
   if (readTouch(x, y)) {
     if (!wasTouched && now - releasedAt >= 100) {
-      if (y >= 120 && y < 162) {
+      if (y >= 132 && y < 166) {
         if (x < 160) toggleResponding(); else toggleSetupValues();
-      } else if (y >= 170 && y < 212) {
+      } else if (y >= 170 && y < 204) {
         if (x < 160) disconnectReceiver(); else invertPanel();
-      } else if (y >= 215) {
+      } else if (y >= 208) {
         toggleMode();
       }
     }
@@ -381,6 +429,7 @@ void loop() {
       case 'd': disconnectReceiver(); break;
       case 'i': invertPanel(); break;
       case 'm': toggleMode(); break;
+      case 'c': clearController(); break;
     }
   }
   if (redraw || now - lastPaintMs >= 1000) {

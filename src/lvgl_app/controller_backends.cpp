@@ -15,6 +15,9 @@
 #include <string.h>
 #include "garden_log.h"
 
+// Used by vescBackendStop before the definition further down.
+void vescProfileSetReport(VescProfileWriteStatus status, uint8_t index);
+
 namespace {
 
 VescValues vescData = {};
@@ -45,6 +48,74 @@ bool farDriverAnnounced = false;
 
 const uint32_t VESC_REPLY_TIMEOUT_MS = 100;
 
+// The VESC firmware's LispBM REPL accepts one command every 0.5 s. Profiles and
+// cruise share that path, so every expression is spaced here rather than in the
+// callers; 550 ms leaves a margin for the controller's own scheduler.
+constexpr uint32_t kVescLispGapMs = 550;
+// A reconnect re-applies the rider's profile, but only after the link has been
+// stable for a moment: the first polls can race LispBM startup.
+constexpr uint32_t kProfileReapplyDelayMs = 1500;
+// GET_MCCONF_TEMP can take a few hundred milliseconds to answer on a busy
+// controller. A timeout is retried before we give up, not treated as a
+// mismatched profile.
+constexpr uint32_t kProfileConfirmRetryMs = 300;
+
+// Telemetry-task scratch space. This task is the only writer of the VESC
+// transport, so these buffers are private to it in practice. They are allocated
+// once on the heap instead of living in .bss or on the task stack: the firmware
+// already sits at the edge of the static DRAM segment, while the stack cost of
+// a profile expression (~1 KiB of locals plus the transport's call chain) was
+// what rebooted the display when a persisted profile was re-applied.
+struct LispScratch {
+  char expression[kVescProfileLispMaxLen];
+  uint8_t payload[kVescProfileLispMaxLen + 16];
+  uint8_t frame[VESC_MAX_FRAME];
+};
+LispScratch *lispScratch = nullptr;
+
+bool ensureLispScratch() {
+  if (lispScratch) return true;
+  lispScratch = (LispScratch *)malloc(sizeof(LispScratch));
+  if (!lispScratch) gardenLog("VESC: could not allocate Lisp scratch buffers");
+  return lispScratch != nullptr;
+}
+
+// Set after an expression goes out so the next one waits for the REPL window.
+bool lispSent = false;
+uint32_t lastLispSentMs = 0;
+
+// Replies to COMM_LISP_REPL_CMD are asynchronous and are collected while a
+// telemetry request waits for its own answer. Each reply is tagged with the
+// purpose of the expression that was last sent, so a profile confirmation is
+// never decided by a late cruise reply (or the reverse).
+enum LispPurpose : uint8_t {
+  kLispNone = 0,
+  kLispProfile,
+  kLispCruise,
+};
+LispPurpose sentLispPurpose = kLispNone;
+bool lastLispReplyOk = false;
+char lastLispReply[32] = {};
+bool profileReplySeen = false;
+bool profileReplyOk = false;
+
+// Set when a cruise expression is on the wire so a REPL error can take the
+// display out of the ACTIVE state instead of showing a cruise that never
+// engaged. A controller that does not answer at all leaves the state alone: the
+// ADC application may still have accepted the command.
+bool cruiseLispAwaitingReply = false;
+bool cruiseReplySeen = false;
+bool cruiseReplyOk = false;
+
+// A cruise expression that could not go out because the REPL was still busy.
+// Only the latest rider action matters (release replaces a queued engage), so a
+// single slot is enough and makes a quick cancel deterministic.
+char pendingCruiseLisp[96] = {};
+bool pendingCruiseLispActive = false;
+
+uint32_t vescConnectedAtMs = 0;
+bool profileReapplyPending = false;
+
 // Cruise control state, owned by the telemetry task. The request slot and the
 // published runtime share one critical section: the UI writes a request and
 // reads the active state, the task drains the request and writes the state.
@@ -68,19 +139,20 @@ enum : uint8_t {
   kProfileStepIdle = 0,
   kProfileStepSend,
   kProfileStepConfirm,
-  kProfileStepGaveUp,  // controller never responded to GET_MCCONF_TEMP;
-                        // conf-set is already on the wire, mark confirmed
-                        // to avoid an infinite retry loop.
 };
 uint8_t profileStepState = kProfileStepIdle;
 uint32_t profileStepDueMs = 0;
 uint8_t profileStepIndex = 0xFF;
 VescProfileTarget profileStepTarget = {};
+// The slot is copied when the request is consumed. Using the same snapshot for
+// the target and the expression stops an edit made while the write is in flight
+// from producing a read-back comparison against different numbers.
+ControllerProfile profileStepSlot = {};
 uint8_t profileStepConfirmRetries = 0;
 
-// How many consecutive GET_MCCONF_TEMP timeouts before we give up and assume
-// the conf-set already took (the expression is on the wire; the controller
-// may simply not speak that command).
+// How many consecutive GET_MCCONF_TEMP timeouts before we stop asking. The
+// write is then accepted only if the REPL acknowledged the expression; a silent
+// controller is reported as failed rather than pretending it confirmed.
 constexpr uint8_t kProfileMaxConfirmRetries = 3;
 
 // The controller restarts LispBM on first use and only takes one REPL command
@@ -123,12 +195,35 @@ void resetVescSession() {
   liveSetup = {};
   liveSetupValid = false;
   setupFailures = 0;
+  lispSent = false;
+  pendingCruiseLispActive = false;
+  pendingCruiseLisp[0] = '\0';
+  cruiseLispAwaitingReply = false;
+  vescConnectedAtMs = 0;
+  profileReapplyPending = false;
+  profileStepState = kProfileStepIdle;
+  profileStepIndex = 0xFF;
+  profileStepDueMs = 0;
+  profileStepConfirmRetries = 0;
+  portENTER_CRITICAL(&cruiseMux);
+  cruiseRequestPending = 0;
+  portEXIT_CRITICAL(&cruiseMux);
+  // The values page must not keep showing numbers from the previous link.
+  portENTER_CRITICAL(&profileMux);
+  vescLiveProfileValid = false;
+  portEXIT_CRITICAL(&profileMux);
 }
 
-void vescSendPacket(const uint8_t *payload, uint8_t len) {
-  uint8_t frame[VESC_MAX_FRAME];
-  const size_t frameLen = vescBuildFrame(payload, len, frame, sizeof(frame));
-  if (frameLen && vescTransport) vescTransport->write(frame, frameLen);
+bool vescSendPacket(const uint8_t *payload, size_t len) {
+  // The VESC frame length is one byte, so a longer payload is not a frame this
+  // protocol can carry. Check before narrowing: a CAN-wrapped profile plus a
+  // maximal expression would otherwise truncate the length to a few bytes.
+  if (!payload || len == 0 || len > 255 || !vescTransport || !ensureLispScratch()) return false;
+  const size_t frameLen = vescBuildFrame(payload, (uint8_t)len, lispScratch->frame,
+                                         sizeof(lispScratch->frame));
+  if (!frameLen) return false;
+  const size_t written = vescTransport->write(lispScratch->frame, frameLen);
+  return written == frameLen;
 }
 
 // Writes one SET_* control frame. Unlike vescRequest this expects no reply: the
@@ -137,7 +232,119 @@ void vescSendPacket(const uint8_t *payload, uint8_t len) {
 void vescSendControl(uint8_t command, int32_t value) {
   uint8_t payload[8];
   const size_t n = vescBuildControlPayload(command, vescCanId, value, payload, sizeof(payload));
-  if (n) vescSendPacket(payload, (uint8_t)n);
+  if (n) (void)vescSendPacket(payload, n);
+}
+
+bool vescLispReady(uint32_t now) {
+  return !lispSent || (uint32_t)(now - lastLispSentMs) >= kVescLispGapMs;
+}
+
+// True when the text looks like a REPL error. Successful expressions may return
+// a value, a number or "OK" depending on the firmware, so only obvious failure
+// wording is treated as a rejection.
+bool lispReplyLooksLikeError(const char *text) {
+  char lower[32];
+  size_t i = 0;
+  for (; text && text[i] && i + 1 < sizeof(lower); i++) {
+    char c = text[i];
+    lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+  }
+  lower[i] = '\0';
+  return strstr(lower, "err") || strstr(lower, "fault") || strstr(lower, "invalid") ||
+         strstr(lower, "not running") || strstr(lower, "unknown");
+}
+
+void vescRecordLispReply(const uint8_t *payload, size_t len) {
+  if (!payload || len < 2) return;
+  const char *text = (const char *)(payload + 1);
+  size_t copy = 0;
+  while (copy < len - 1 && copy < sizeof(lastLispReply) - 1 && text[copy]) copy++;
+  memcpy(lastLispReply, text, copy);
+  lastLispReply[copy] = '\0';
+  lastLispReplyOk = !lispReplyLooksLikeError(lastLispReply);
+  if (sentLispPurpose == kLispProfile) {
+    profileReplySeen = true;
+    profileReplyOk = lastLispReplyOk;
+  } else if (sentLispPurpose == kLispCruise) {
+    cruiseReplySeen = true;
+    cruiseReplyOk = lastLispReplyOk;
+  }
+  gardenLogf("VESC Lisp reply: %s\n", lastLispReply);
+}
+
+// Sends one expression and starts the REPL gap. Returns false when the
+// expression could not be built or handed to the transport. The CAN-forward
+// prefix is written in front of the Lisp payload directly, so no second copy is
+// needed for a forwarded controller.
+bool vescSendLispExpression(const char *expression, uint32_t now, LispPurpose purpose) {
+  if (!expression || !expression[0] || !vescTransport || !ensureLispScratch()) return false;
+  const size_t prefix = vescCanId != 0 ? 2u : 0u;
+  const size_t n = vescBuildLispPayload(expression, lispScratch->payload + prefix,
+                                        sizeof(lispScratch->payload) - prefix);
+  if (n == 0 || n + prefix > 255) {
+    if (n != 0) gardenLog("VESC: Lisp expression does not fit one VESC frame");
+    return false;
+  }
+  if (prefix) {
+    lispScratch->payload[0] = VESC_COMM_FORWARD_CAN;
+    lispScratch->payload[1] = vescCanId;
+  }
+  if (!vescSendPacket(lispScratch->payload, n + prefix)) return false;
+  lispSent = true;
+  lastLispSentMs = now;
+  sentLispPurpose = purpose;
+  return true;
+}
+
+void vescQueueCruiseLisp(const char *expression) {
+  if (!expression || !expression[0]) return;
+  const size_t len = strlen(expression);
+  if (len >= sizeof(pendingCruiseLisp)) return;
+  memcpy(pendingCruiseLisp, expression, len + 1);
+  pendingCruiseLispActive = true;
+}
+
+void vescServiceCruiseLisp(uint32_t now) {
+  if (!pendingCruiseLispActive) return;
+  if (!vescTransport) {
+    pendingCruiseLispActive = false;
+    return;
+  }
+  if (!vescLispReady(now)) return;
+  cruiseReplySeen = false;
+  cruiseReplyOk = false;
+  if (vescSendLispExpression(pendingCruiseLisp, now, kLispCruise)) {
+    gardenLogf("VESC cruise command: %s\n", pendingCruiseLisp);
+    cruiseLispAwaitingReply = true;
+    pendingCruiseLispActive = false;
+    pendingCruiseLisp[0] = '\0';
+  }
+}
+
+// Takes the display out of the ACTIVE state when the REPL explicitly rejected
+// the cruise expression. Without this the rider would see CRUISE ENGAGED after
+// a command the controller never accepted. Silence is not treated as failure:
+// some firmware builds evaluate the expression without printing a reply.
+void vescCheckCruiseReply() {
+  if (!cruiseLispAwaitingReply || !cruiseReplySeen) return;
+  cruiseLispAwaitingReply = false;
+  if (cruiseReplyOk) return;
+  bool wasActive = false;
+  portENTER_CRITICAL(&cruiseMux);
+  if (cruiseRuntime.state == CRUISE_STATE_ACTIVE) {
+    cruiseRuntime.state = CRUISE_STATE_OFF;
+    cruiseRuntime.targetKmh = 0;
+    cruiseRuntime.rpmPerKmh = 0.0F;
+    cruiseOutcome = CRUISE_OUTCOME_FAILED;
+    wasActive = true;
+  }
+  portEXIT_CRITICAL(&cruiseMux);
+  if (wasActive) {
+    // The engage expression is a progn: detach may have run before the
+    // override failed. Give the controller's buttons back on the next REPL slot.
+    vescQueueCruiseLisp(kCruiseLispDetachUndo);
+    gardenLogf("cruise: controller rejected the command: %s\n", lastLispReply);
+  }
 }
 
 bool vescReadByte(uint8_t &out, uint32_t deadline) {
@@ -173,16 +380,30 @@ int vescReadPacket(uint8_t *payload, size_t capacity, uint32_t timeoutMs) {
   return (int)length;
 }
 
-// Sends one command and returns its reply payload length, or -1. The reply is
-// left in `msg` for the caller to hand to the matching parser.
+// Sends one command and waits for the matching reply. A LispBM reply can be in
+// the stream first (it is asynchronous), so it is recorded and skipped instead
+// of being mistaken for the telemetry answer or discarded before the request.
+// Stale replies to other commands are ignored the same way.
 int vescRequest(uint8_t command, uint8_t *msg, size_t capacity) {
   if (!vescTransport) return -1;
   uint8_t payload[3];
   const size_t n = vescBuildCommandPayload(command, vescCanId, payload, sizeof(payload));
   if (n == 0) return -1;
-  while (vescTransport->available()) vescTransport->read();
-  vescSendPacket(payload, (uint8_t)n);
-  return vescReadPacket(msg, capacity, VESC_REPLY_TIMEOUT_MS);
+  if (!vescSendPacket(payload, n)) return -1;
+
+  const uint32_t deadline = millis() + VESC_REPLY_TIMEOUT_MS;
+  for (;;) {
+    const int32_t remaining = (int32_t)(deadline - millis());
+    if (remaining <= 0) return -1;
+    const int len = vescReadPacket(msg, capacity, (uint32_t)remaining);
+    if (len <= 0) return -1;
+    if (msg[0] == VESC_COMM_LISP_REPL_CMD) {
+      vescRecordLispReply(msg, (size_t)len);
+      continue;
+    }
+    if (msg[0] == command) return len;
+    // A reply for an older request: keep waiting for ours.
+  }
 }
 
 bool requestValues() {
@@ -308,6 +529,9 @@ void fillVescSample(ControllerSample &out, uint32_t now) {
 
 void vescUartBackendBegin() {
   resetVescSession();
+  // Reserve the scratch space before Bluetooth and LVGL have fragmented the
+  // heap. It is small, but every telemetry request uses the frame buffer.
+  (void)ensureLispScratch();
   vescUsingBle = false;
   vescSerial.begin(vescUartBaud, SERIAL_8N1, VESC_RX_PIN, VESC_TX_PIN);
   vescTransport = &vescSerial;
@@ -315,6 +539,7 @@ void vescUartBackendBegin() {
 
 void vescBleBackendBegin() {
   resetVescSession();
+  (void)ensureLispScratch();
   vescUsingBle = true;
   vescBleStream.begin();
   vescTransport = &vescBleStream;
@@ -324,72 +549,54 @@ void vescBackendStop() {
   if (vescUsingBle) vescBleStream.disconnectDevice();
   else vescSerial.end();
   vescTransport = nullptr;
+  // A write in flight cannot finish once the transport is gone. Report it
+  // before the session state is cleared so the next backend does not inherit a
+  // half-finished confirmation.
+  if (profileStepState != kProfileStepIdle)
+    vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileStepIndex);
   resetVescSession();
 }
 
-// Wraps a command payload with the CAN-forward prefix when the display talks to
-// a remote VESC through a local one. The prefix goes before the command byte,
-// exactly as vescBuildCommandPayload does for the requests.
-uint8_t profileWrapCanForward(const uint8_t *payload, size_t len, uint8_t *out, size_t cap) {
-  if (vescCanId == 0) {
-    if (cap < len) return 0;
-    memcpy(out, payload, len);
-    return (uint8_t)len;
-  }
-  if (cap < len + 2u) return 0;
-  out[0] = VESC_COMM_FORWARD_CAN;
-  out[1] = vescCanId;
-  memcpy(out + 2, payload, len);
-  return (uint8_t)(len + 2u);
-}
-
-// Sends one LispBM expression the ADC application understands (engage/release
-// of the controller's native cruise). Uses the same COMM_LISP_REPL_CMD path and
-// CAN-forward wrapping as the profiles. The firmware's REPL accepts only one
-// command every 0.5 s, so an engage is a single combined expression.
+// Queues one LispBM expression the ADC application understands (engage/release
+// of the controller's native cruise). The service below sends it when the REPL
+// window opens; a quick engage-then-cancel replaces the queued expression, so a
+// release is never lost behind the rate limit.
 void vescCruiseSendLisp(const char *expression) {
-  if (!expression || !expression[0]) return;
-  uint8_t inner[kVescProfileLispMaxLen + 8];
-  const size_t n = vescBuildLispPayload(expression, inner, sizeof(inner));
-  if (n == 0) return;
-  uint8_t payload[sizeof(inner) + 8];
-  const uint8_t wrapped = profileWrapCanForward(inner, n, payload, sizeof(payload));
-  if (wrapped) vescSendPacket(payload, wrapped);
+  vescQueueCruiseLisp(expression);
 }
 
 // Asks the controller for its current profile numbers and publishes them. This
 // is the "display reads from the VESC" half: the values page shows these, so it
-// reports what the controller holds, not what the display last sent.
-void vescProfileRefresh() {
+// reports what the controller holds, not what the display last sent. Returns
+// false when the controller did not answer; a valid answer that differs from
+// the target is a separate case the caller can distinguish.
+bool vescProfileRefresh() {
   uint8_t msg[64];
   const int len = vescRequest(VESC_COMM_GET_MCCONF_TEMP, msg, sizeof(msg));
-  if (len <= 0) return;
+  if (len <= 0) return false;
   VescMcconfTemp parsed = {};
-  if (!vescParseMcconfTemp(msg, (size_t)len, parsed)) return;
+  if (!vescParseMcconfTemp(msg, (size_t)len, parsed)) return false;
+  portENTER_CRITICAL(&profileMux);
   vescLiveProfile = parsed;
   vescLiveProfileValid = true;
+  portEXIT_CRITICAL(&profileMux);
+  return true;
 }
 
 // Writes the whole profile as one LispBM expression. conf-set changes only the
 // fields it names and applies in RAM, so this is the only write a profile makes:
 // nothing goes out on COMM_SET_MCCONF_TEMP, whose every-field semantics would
-// widen the limits a profile does not own.
-void vescProfileSendProfile(uint8_t index, float rpmPerKmh) {
-  if (index >= kControllerProfileCount) return;
-  const ControllerProfile &slot = controllerProfiles[index];
-  char expression[kVescProfileLispMaxLen];
+// widen the limits a profile does not own. The expression and wire buffers are
+// heap-backed, not stack locals: the controller task used to carry about a
+// kilobyte of arrays here on every reconnect.
+bool vescProfileSendProfile(const ControllerProfile &slot, float rpmPerKmh, uint32_t now) {
+  if (!ensureLispScratch()) return false;
   const size_t len = vescProfileLisp(slot.maxSpeedKmh, slot.accelPercent, slot.brakePercent,
                                      slot.fieldWeakeningAmps, slot.motorAmps, slot.batteryAmps,
-                                     rpmPerKmh, expression, sizeof(expression));
-  if (len == 0) return;
-  // The expression is the bulk of the packet: a command id, up to
-  // kVescProfileLispMaxLen characters and a NUL.
-  uint8_t inner[kVescProfileLispMaxLen + 8];
-  const size_t n = vescBuildLispPayload(expression, inner, sizeof(inner));
-  if (n == 0) return;
-  uint8_t payload[sizeof(inner) + 8];
-  const uint8_t wrapped = profileWrapCanForward(inner, n, payload, sizeof(payload));
-  if (wrapped) vescSendPacket(payload, wrapped);
+                                     rpmPerKmh, lispScratch->expression,
+                                     sizeof(lispScratch->expression));
+  if (len == 0) return false;
+  return vescSendLispExpression(lispScratch->expression, now, kLispProfile);
 }
 
 void vescProfileSetReport(VescProfileWriteStatus status, uint8_t index) {
@@ -402,64 +609,118 @@ void vescProfileSetReport(VescProfileWriteStatus status, uint8_t index) {
 // Runs one step of a profile write, and the periodic read-back when idle. Called
 // from the telemetry poll so the wire is only ever touched from one task.
 void vescProfileStep(uint32_t now, float rpmPerKmh) {
-  uint8_t request = 0xFF;
-  portENTER_CRITICAL(&profileMux);
-  request = profileWriteRequestIndex;
-  profileWriteRequestIndex = 0xFF;
-  portEXIT_CRITICAL(&profileMux);
-
-  if (request != 0xFF && request < kControllerProfileCount) {
-    const ControllerProfile &slot = controllerProfiles[request];
-    profileStepTarget = vescProfileTarget(slot.maxSpeedKmh, slot.accelPercent, slot.brakePercent,
-                                          slot.batteryAmps, rpmPerKmh);
-    profileStepIndex = request;
-    profileStepState = kProfileStepSend;
-    profileStepDueMs = now;
-    vescProfileSetReport(VESC_PROFILE_WRITE_SENT, request);
-  }
+  // A queued cruise expression is the rider's latest action and gets the next
+  // REPL slot. Release in particular must not wait behind a periodic profile
+  // read-back or a write.
+  vescServiceCruiseLisp(now);
 
   if (profileStepState == kProfileStepIdle) {
-    if ((int32_t)(now - profileLastRefreshMs) >= 0) {
-      profileLastRefreshMs = now + kProfileRefreshMs;
-      vescProfileRefresh();
+    uint8_t request = 0xFF;
+    portENTER_CRITICAL(&profileMux);
+    request = profileWriteRequestIndex;
+    profileWriteRequestIndex = 0xFF;
+    portEXIT_CRITICAL(&profileMux);
+
+    if (request != 0xFF && request < kControllerProfileCount) {
+      // Copy the slot now. The UI may edit another field while the settle and
+      // read-back are in flight; the target and the expression must describe
+      // the same numbers or the confirmation can disagree with itself.
+      profileStepSlot = controllerProfiles[request];
+      profileStepTarget = vescProfileTarget(profileStepSlot.maxSpeedKmh, profileStepSlot.accelPercent,
+                                            profileStepSlot.brakePercent, profileStepSlot.batteryAmps,
+                                            rpmPerKmh);
+      profileStepIndex = request;
+      profileStepState = kProfileStepSend;
+      profileStepDueMs = now;
+      profileStepConfirmRetries = 0;
+      vescProfileSetReport(VESC_PROFILE_WRITE_SENT, request);
+    } else {
+      if ((int32_t)(now - profileLastRefreshMs) >= 0) {
+        profileLastRefreshMs = now + kProfileRefreshMs;
+        (void)vescProfileRefresh();
+      }
+      return;
     }
-    return;
   }
   if ((int32_t)(now - profileStepDueMs) < 0) return;
 
   switch (profileStepState) {
     case kProfileStepSend:
-      vescProfileSendProfile(profileStepIndex, rpmPerKmh);
+      if (pendingCruiseLispActive) {
+        // Do not let a profile write overtake a rider release that is waiting
+        // for the REPL window. Try again after the cruise command goes out.
+        profileStepDueMs = now + 50;
+        return;
+      }
+      if (!vescLispReady(now)) {
+        profileStepDueMs = lastLispSentMs + kVescLispGapMs;
+        return;
+      }
+      profileReplySeen = false;
+      profileReplyOk = false;
+      if (!vescProfileSendProfile(profileStepSlot, rpmPerKmh, now)) {
+        gardenLog("profile: could not build or send the Lisp expression");
+        vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileStepIndex);
+        profileStepState = kProfileStepIdle;
+        profileStepIndex = 0xFF;
+        profileStepConfirmRetries = 0;
+        return;
+      }
       profileStepState = kProfileStepConfirm;
       profileStepDueMs = now + kProfileSettleMs;
       break;
     case kProfileStepConfirm: {
-      vescProfileRefresh();
-      const bool matches =
-          vescLiveProfileValid && vescProfileReadBackMatches(profileStepTarget, vescLiveProfile);
-      if (matches) {
+      // The REPL answer is asynchronous and may already have arrived while the
+      // telemetry poll was waiting for GET_VALUES. An explicit error is final;
+      // otherwise the controller's own numbers are still the confirmation.
+      if (profileReplySeen && !profileReplyOk) {
+        gardenLogf("profile: controller rejected the expression: %s\n", lastLispReply);
+        vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileStepIndex);
+        profileStepState = kProfileStepIdle;
+        profileStepIndex = 0xFF;
         profileStepConfirmRetries = 0;
-        vescProfileSetReport(VESC_PROFILE_WRITE_CONFIRMED, profileStepIndex);
-      } else {
-        profileStepConfirmRetries++;
-        if (profileStepConfirmRetries >= kProfileMaxConfirmRetries) {
-          // The controller never answered GET_MCCONF_TEMP. The conf-set
-          // expression is already on the wire and the LispBM interpreter
-          // applies it in RAM; without an echo we cannot prove it took, so
-          // we give up rather than retry forever.
-          gardenLog("profile: controller did not answer GET_MCCONF_TEMP, "
-                    "assuming conf-set took");
+        break;
+      }
+
+      if (vescProfileRefresh()) {
+        VescMcconfTemp live = {};
+        if (vescProfileReadBackCopy(live) && vescProfileReadBackMatches(profileStepTarget, live)) {
           vescProfileSetReport(VESC_PROFILE_WRITE_CONFIRMED, profileStepIndex);
         } else {
+          gardenLog("profile: controller answered but the read-back does not match");
           vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileStepIndex);
         }
+        profileStepState = kProfileStepIdle;
+        profileStepIndex = 0xFF;
+        profileStepConfirmRetries = 0;
+        break;
       }
+
+      profileStepConfirmRetries++;
+      if (profileStepConfirmRetries < kProfileMaxConfirmRetries) {
+        // The controller can be busy with LispBM or motor work; ask again
+        // instead of turning one missed reply into a failed profile.
+        profileStepDueMs = now + kProfileConfirmRetryMs;
+        break;
+      }
+
+      // No read-back after all retries. The expression is on the wire and
+      // LispBM applies conf-set in RAM; accept it only when the REPL itself
+      // acknowledged the command, otherwise report the failure instead of
+      // claiming a confirmation the controller never gave.
+      const bool acked = profileReplySeen && profileReplyOk;
+      gardenLogf("profile: no GET_MCCONF_TEMP reply after %u tries; REPL %s\n",
+                 (unsigned)kProfileMaxConfirmRetries, acked ? "acknowledged" : "silent");
+      vescProfileSetReport(acked ? VESC_PROFILE_WRITE_CONFIRMED : VESC_PROFILE_WRITE_FAILED,
+                           profileStepIndex);
       profileStepState = kProfileStepIdle;
       profileStepIndex = 0xFF;
+      profileStepConfirmRetries = 0;
       break;
     }
     default:
       profileStepState = kProfileStepIdle;
+      profileStepIndex = 0xFF;
       profileStepConfirmRetries = 0;
       break;
   }
@@ -475,6 +736,10 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
   if (!vescConnected) vescNextDisconnectedAttemptMs = now + VESC_DISCONNECTED_POLL_MS;
 
   if (!requestValues()) {
+    // A release is write-only and can still reach a controller whose telemetry
+    // reply was lost, so do not let a failed poll strand it.
+    vescServiceCruiseLisp(now);
+    vescCheckCruiseReply();
     if (vescConnected && now - vescLastSuccessMs > VESC_STALE_AFTER_MS) {
       vescConnected = false;
       setupValuesSupported = false;
@@ -495,11 +760,17 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
       // A write in flight cannot finish on a dead link: report it failed and drop
       // the step, so it does not resume mid-sequence when the link returns.
       if (profileStepState != kProfileStepIdle) {
+        const uint8_t failedIndex = profileStepIndex;
         profileStepState = kProfileStepIdle;
         profileStepIndex = 0xFF;
         profileStepConfirmRetries = 0;
-        vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, profileWriteReport.index);
+        vescProfileSetReport(VESC_PROFILE_WRITE_FAILED, failedIndex);
       }
+      // Nothing queued for the old link may leak onto the next one.
+      pendingCruiseLispActive = false;
+      pendingCruiseLisp[0] = '\0';
+      profileReapplyPending = false;
+      lispSent = false;
       vescLiveProfileValid = false;
       gardenLog("VESC telemetry disconnected");
     }
@@ -522,15 +793,22 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     cruiseRuntime.rpmPerKmh = 0.0F;
     cruiseRequestPending = 0;
     portEXIT_CRITICAL(&cruiseMux);
-    // Re-apply the active profile on every reconnect. The controller's limits
-    // live in RAM only (conf-set, no store), so a power cycle or link drop
-    // wipes them. The rider's chosen profile must be rewritten on the new link.
-    if (activeControllerProfile != 0xFF && activeControllerProfile < kControllerProfileCount)
-      vescProfileRequestWrite(activeControllerProfile);
+    // Re-apply the profile the rider actually applied on every reconnect. The
+    // controller's limits live in RAM only (conf-set, no store), so a power
+    // cycle or link drop wipes them. Selecting a slot in the menu is not an
+    // apply; only a confirmed write is. Wait until the link has been stable for
+    // a moment instead of writing in the same poll that discovered it: LispBM
+    // may still be starting, and the first polls are the busiest.
+    vescConnectedAtMs = now;
+    profileReapplyPending =
+        appliedControllerProfile != 0xFF && appliedControllerProfile < kControllerProfileCount;
     gardenLog("VESC telemetry connected");
   }
   vescConnected = true;
   vescLastSuccessMs = now;
+  // requestValues() collects any asynchronous Lisp reply before it returns;
+  // act on a cruise rejection before the next state-machine cycle.
+  vescCheckCruiseReply();
   updateSetupValues();
   updateFirmwareVersion(now);
   fillVescSample(out, now);
@@ -578,9 +856,28 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     CruiseOutput control = {};
     portENTER_CRITICAL(&cruiseMux);
     control = cruiseControlStep(cruiseRuntime, settings, inputs, request == 1, request == 2, now);
-    cruiseOutcome = control.outcome;  // an edge; NONE unless something changed
+    // Publish edges only. A NONE from the next poll must not erase an outcome
+    // the UI has not read yet: both sides run at about 100 ms.
+    if (control.outcome != CRUISE_OUTCOME_NONE) cruiseOutcome = control.outcome;
     portEXIT_CRITICAL(&cruiseMux);
     if (control.send) vescCruiseSendLisp(control.lisp);
+  }
+
+  // A profile is re-applied only after the link has been stable for a moment,
+  // and only when no other write is already in flight. This is deliberately
+  // later than the first telemetry sample, so a reconnect cannot turn into a
+  // bootloop before the dashboard has even drawn.
+  if (profileReapplyPending && (int32_t)(now - vescConnectedAtMs) >= (int32_t)kProfileReapplyDelayMs) {
+    profileReapplyPending = false;
+    bool writeQueued = false;
+    portENTER_CRITICAL(&profileMux);
+    writeQueued = profileWriteRequestIndex != 0xFF;
+    portEXIT_CRITICAL(&profileMux);
+    if (!writeQueued && profileStepState == kProfileStepIdle &&
+        appliedControllerProfile != 0xFF && appliedControllerProfile < kControllerProfileCount) {
+      gardenLogf("profile: re-applying slot %u after reconnect\n", (unsigned)appliedControllerProfile);
+      vescProfileRequestWrite(appliedControllerProfile);
+    }
   }
 
   // A requested profile switch, or the slow read-back that keeps the values page
@@ -603,10 +900,11 @@ void vescCruiseRequestDisengage() {
 }
 
 void vescProfileRequestWrite(uint8_t index) {
+  // Only the slot is queued here. The report becomes SENT when the telemetry
+  // task actually consumes it, so a request made while another write is still
+  // being confirmed cannot claim a state the wire has not reached.
   portENTER_CRITICAL(&profileMux);
-  profileWriteRequestIndex = index;
-  profileWriteReport.status = VESC_PROFILE_WRITE_SENT;
-  profileWriteReport.index = index;
+  if (index < kControllerProfileCount) profileWriteRequestIndex = index;
   portEXIT_CRITICAL(&profileMux);
 }
 
@@ -615,6 +913,14 @@ VescProfileWriteReport vescProfileWriteReportGet() {
   const VescProfileWriteReport report = profileWriteReport;
   portEXIT_CRITICAL(&profileMux);
   return report;
+}
+
+bool vescProfileReadBackCopy(VescMcconfTemp &out) {
+  portENTER_CRITICAL(&profileMux);
+  const bool valid = vescLiveProfileValid;
+  if (valid) out = vescLiveProfile;
+  portEXIT_CRITICAL(&profileMux);
+  return valid;
 }
 
 bool vescCruiseActive(uint16_t &targetKmh) {
@@ -629,6 +935,10 @@ bool vescCruiseActive(uint16_t &targetKmh) {
 void vescCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   portENTER_CRITICAL(&cruiseMux);
   outcome = cruiseOutcome;
+  // The outcome is an edge, not a level: the UI reads it once per tick. Leaving
+  // it set made every tick re-deliver the same toast ("CRUISE ENGAGED" kept
+  // appearing while the cruise ran) and hid the next real transition.
+  cruiseOutcome = CRUISE_OUTCOME_NONE;
   state = cruiseRuntime.state;
   portEXIT_CRITICAL(&cruiseMux);
 }

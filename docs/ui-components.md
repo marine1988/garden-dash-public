@@ -42,6 +42,24 @@ than creating another local magic number.
 If an existing constructor is file-local, extend or move that constructor
 instead of reproducing its LVGL styles in a second place.
 
+## Dashboard profile badge and cruise chip
+
+Two compact overlays are added after a dashboard theme has built, so themes do
+not need to reserve layout space for them:
+
+- **Profile badge** — 22x22, one letter (`E`, `D`, `S`, or a neutral `P` before
+  a profile is chosen). It is interactive: a tap cycles Eco → Drive → Sport →
+  Eco, selects the slot, and queues the write to the controller. Its position is
+  per-theme (`85,3` normally, with explicit positions for Bar Graph, Pixel Gauge
+  and Large Tiles). It has a 6 px extended click area.
+- **Cruise chip** — green, 100x18 at `110,1`, covering the dashboard title with
+  `CRUISE <target>` while the controller's ADC application holds. It is
+  passive, never captures touches, and is hidden unless the link is live, there
+  is no fault, and cruise is active.
+
+Both are checked in `cyd_runtime_input`; every dashboard preview shows the
+badge, and `01_cyber_hud_cruise` shows the cruise chip.
+
 ## Standard menu tile behavior
 
 - Normal interactive tiles use the dark grey control surface and fixed

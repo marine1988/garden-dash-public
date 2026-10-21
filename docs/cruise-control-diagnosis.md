@@ -203,6 +203,16 @@ expression the ADC application understands, not a periodic `SET_RPM`:
 - The two expressions travel over the existing `COMM_LISP_REPL_CMD` path in
   `controller_backends.cpp`, wrapping them for CAN-forward exactly as a profile
   write does.
+- One REPL slot is shared with profile writes. A cruise expression is queued
+  when the REPL is still inside its 0.5 s window, and the latest rider action
+  replaces a queued one, so a quick cancel cannot be lost behind an engage.
+- A repeated engage while cruise is running is ignored rather than re-evaluated.
+  The ADC application captures its setpoint on the transition into cruise, so a
+  second engage cannot retarget it; treating it as a fresh request could drop
+  the local state while the controller still held the old setpoint.
+- The dashboard shows the running cruise as a green `CRUISE <target>` chip over
+  the title, so the state is visible after leaving the cruise page. It hides on
+  release, brake, fault, or link loss.
 
 Companion findings from the diagnosis are fixed:
 

@@ -381,14 +381,27 @@ constexpr uint8_t kControllerProfileCount = 3;
 extern ControllerProfile controllerProfiles[kControllerProfileCount];
 // Index of the profile the rider has selected, or 0xFF when none has been
 // chosen. The dashboard badge follows this, so an unselected display shows none.
+// Selection is not a write: the controller is only touched when the rider
+// confirms APPLY, which is what appliedControllerProfile records.
 extern uint8_t activeControllerProfile;
+// Index of the profile the controller is known to hold, or 0xFF when no profile
+// has been confirmed applied to it. Only a confirmed write moves this, so a
+// boot or reconnect can safely replay it (the backend does) without turning a
+// mere tap on a slot into a controller write.
+extern volatile uint8_t appliedControllerProfile;
 // The fixed name ("ECO", "DRIVE", "SPORT") and the one-letter badge ("E", "D",
 // "S") of a slot. Out-of-range indices give an empty string.
 const char *controllerProfileName(uint8_t index);
 const char *controllerProfileLetter(uint8_t index);
-// Records a slot as the selected profile. Refuses an out-of-range index.
+// Records a slot as the selected profile. Refuses an out-of-range index. This
+// only feeds the badge and the editor; it never marks the profile as applied.
 void applyControllerProfile(uint8_t index);
+// Records that the controller confirmed `index` as the profile it now holds.
+// Refuses an out-of-range index and persists the result.
+void markControllerProfileApplied(uint8_t index);
 // Restores a slot's defaults (so it reads as a starting point, not a blank).
+// A slot that was marked applied stops being applied: its numbers changed, so
+// the controller no longer matches it.
 void resetControllerProfile(uint8_t index);
 // The controller's own live profile numbers, as last reported by
 // COMM_GET_MCCONF_TEMP. The values page shows these when they are available, so

@@ -169,6 +169,16 @@ if(CYD_BUILD_TESTS OR CYD_BUILD_SIMULATOR)
                  "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_protocol.cpp")
   target_include_directories(cyd_vesc_profile_test PRIVATE "${PROJECT_ROOT}/src/lvgl_app")
   add_test(NAME cyd_vesc_profile COMMAND cyd_vesc_profile_test)
+  # The fake VESC's LispBM subset and emulated controller, checked end-to-end:
+  # vesc_profile.cpp builds the expression, the fake applies it, and the
+  # firmware's COMM_GET_MCCONF_TEMP parser confirms the read-back.
+  add_executable(cyd_vesc_emulator_test vesc_emulator_test.cpp
+                 "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_profile.cpp"
+                 "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_protocol.cpp")
+  target_include_directories(cyd_vesc_emulator_test PRIVATE
+    "${PROJECT_ROOT}/src/lvgl_app"
+    "${PROJECT_ROOT}/src/vesc_test")
+  add_test(NAME cyd_vesc_emulator COMMAND cyd_vesc_emulator_test)
   add_executable(cyd_preferences_test preferences_test.cpp Preferences.cpp)
   target_include_directories(cyd_preferences_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
   add_test(
