@@ -17,6 +17,11 @@ struct FirmwareChangelogEntry {
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
         "2026-10-21",
+        "VESC cruise package",
+        "Cruise follows the VESC package; the display shows state/settings, no button.",
+    },
+    {
+        "2026-10-21",
         "Profile and cruise fixes",
         "Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.",
     },
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-13",
         "Cruise holds on the scooter",
         "Cruise now drives the controller's own hold over LispBM; braking releases it.",
-    },
-    {
-        "2026-10-13",
-        "Garden rename",
-        "The project, firmware and display are now Garden-Dash and GARDEN DASH.",
     },
 };
 

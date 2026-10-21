@@ -182,6 +182,13 @@ implement.
 
 ### Profiles and cruise over LispBM
 
+> **0.02-rc2 note:** the display now integrates the
+> [VESC Cruise Control](https://github.com/marine1988/vesc_cruise_control)
+> package and no longer sends its own `app-adc-detach`/`app-adc-override`
+> expressions. The fake sender does not emulate that package, so use a real VESC
+> with the package installed for a cruise test. The app-ADC state below remains
+> useful for older images and the host regression tests.
+
 The dashboard writes a ride profile as one `{...}` block of
 `(conf-set 'key value)` forms. The fake evaluates the six fields the display
 owns — `l-max-erpm`, `l-current-max-scale`, `l-current-min-scale`,

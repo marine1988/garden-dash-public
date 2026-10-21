@@ -734,6 +734,17 @@ void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   }
   vescCruiseOutcome(outcome, state);
 }
+bool controllerCruisePackageSnapshot(CruisePackageSnapshot &out) {
+  if (!controllerSupportsCruise()) return false;
+  return vescCruisePackageSnapshot(out);
+}
+uint32_t controllerCruisePackageRevision() {
+  if (!controllerSupportsCruise()) return 0;
+  return vescCruisePackageRevision();
+}
+void controllerCruiseRequestSettings() {
+  if (controllerSupportsCruise()) vescCruiseRequestSettings();
+}
 #else
 static bool previewCruiseActive = false;
 static uint16_t previewCruiseTargetKmh = 0;
@@ -752,6 +763,21 @@ void previewSetCruiseState(bool active, uint16_t targetKmh) {
   previewCruiseActive = active;
   previewCruiseTargetKmh = targetKmh;
 }
+bool controllerCruisePackageSnapshot(CruisePackageSnapshot &out) {
+  out = {};
+  out.available = true;
+  out.state = previewCruiseActive ? CRUISE_PACKAGE_ON : CRUISE_PACKAGE_OFF;
+  snprintf(out.lastCancel, sizeof(out.lastCancel), "none");
+  out.enabled = true;
+  out.holdDeciS = 50;
+  out.deadbandHundredths = 10;
+  out.minSpeedKmh = 5;
+  out.maxSpeedKmh = 25;
+  out.beepsEnabled = true;
+  return true;
+}
+uint32_t controllerCruisePackageRevision() { return previewCruiseActive ? 1 : 0; }
+void controllerCruiseRequestSettings() {}
 #endif
 
 // Controller profiles. The capability comes from the active backend's caps, so

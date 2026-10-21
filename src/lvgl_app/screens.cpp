@@ -3019,110 +3019,13 @@ static void developerDisplayButtonEventCb(lv_event_t *e) {
   menuAction(BTN_MENU_DISPLAY);
 }
 
-// ── Cruise engage button ─────────────────────────────────────────────────────
-
-// Engaging holds the button for the configured hold time, so a passing touch
-// cannot take over the throttle. Cancelling is a plain tap and never waits: a
-// rider reaching for the brake must be able to hand control back at once.
-//
-// The button also mirrors the live state: observeCruiseState(), driven by the
-// dashboard tick, rebuilds the cruise page when the state changes, so a running
-// cruise reads CANCEL without the rider touching anything. The rebuild happens
-// on the tick, well outside the engaging press, so it cannot swallow the tap.
-static lv_obj_t *cruiseEngageButton = NULL;
-static lv_timer_t *cruiseHoldTimer = NULL;
-static uint32_t cruiseHoldStartedMs = 0;
-static bool cruiseHoldTriggered = false;
+// Reports the VESC cruise package's edge as a toast, and rebuilds the status
+// page when its state or settings line changes. Driven by the dashboard tick
+// (100 ms) and the package's one-line-per-second state message.
 static bool cruiseStateKnown = false;
 static bool cruiseReportedActive = false;
+static uint32_t cruisePackageRevisionSeen = 0;
 
-static void stopCruiseHoldTimer() {
-  if (!cruiseHoldTimer) return;
-  lv_timer_del(cruiseHoldTimer);
-  cruiseHoldTimer = NULL;
-}
-
-static void cruiseHoldTimerCb(lv_timer_t *timer) {
-  if (!cruiseEngageButton) {
-    cruiseHoldTimer = NULL;
-    lv_timer_del(timer);
-    return;
-  }
-  // The press has to last the configured time (tenths of a second), with a
-  // floor of one tick so a zero setting still needs a deliberate press.
-  const uint32_t required = (uint32_t)max<uint16_t>(1, cruiseHoldTimeDeciS) * 100UL;
-  if (millis() - cruiseHoldStartedMs < required) return;
-  cruiseHoldTriggered = true;
-  cruiseHoldTimer = NULL;
-  lv_timer_del(timer);
-  if (!controllerSupportsCruise()) {
-    queueStatusNotice(NOTICE_CRUISE_UNAVAILABLE);
-  } else if (!cruiseControlEnabled) {
-    // The engage path used to toast success with cruise switched off, so the
-    // rider saw "CRUISE ENGAGED" for a no-op. Say what is actually wrong.
-    queueStatusNotice(NOTICE_CRUISE_DISABLED);
-  } else {
-    // The outcome (engaged, or the reason it was refused) is reported by
-    // observeCruiseState() once the telemetry poll has applied the request, so
-    // the toast reflects the controller, not the intention.
-    controllerCruiseEngage();
-  }
-  // No rebuild here: rebuilding between this timer and the touch release used to
-  // destroy the button under the finger and swallow the next tap. The label is
-  // kept in step by observeCruiseState() instead.
-}
-
-static void cruiseEngageEventCb(lv_event_t *e) {
-  const lv_event_code_t code = lv_event_get_code(e);
-  lv_obj_t *button = lv_event_get_target(e);
-  if (code == LV_EVENT_DELETE) {
-    stopCruiseHoldTimer();
-    // Only forget the button if the one being deleted is the one we track. A
-    // screen rebuild deletes the old button after the new one has already
-    // registered, and clearing here would drop the new pointer.
-    if (button == cruiseEngageButton) cruiseEngageButton = NULL;
-    return;
-  }
-  if (code == LV_EVENT_PRESSED) {
-    uint16_t activeTarget = 0;
-    if (controllerCruiseActive(activeTarget)) {
-      // A cancel tap while engaged. Clear any stale hold flag so the CLICKED
-      // that follows cancels instead of being swallowed.
-      cruiseHoldTriggered = false;
-      return;
-    }
-    cruiseEngageButton = button;
-    cruiseHoldTriggered = false;
-    cruiseHoldStartedMs = millis();
-    stopCruiseHoldTimer();
-    cruiseHoldTimer = lv_timer_create(cruiseHoldTimerCb, 40, NULL);
-    return;
-  }
-  if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-    stopCruiseHoldTimer();
-    lv_obj_set_style_bg_color(button, cyd_ui::activeControlSurface(), LV_STATE_PRESSED);
-    return;
-  }
-  if (code != LV_EVENT_CLICKED) return;
-  if (cruiseHoldTriggered) {
-    cruiseHoldTriggered = false;
-    return;
-  }
-  uint16_t activeTarget = 0;
-  if (controllerCruiseActive(activeTarget)) {
-    controllerCruiseDisengage();
-    queueStatusNotice(NOTICE_CRUISE_CANCELLED);
-    queueRebuild(SCREEN_SUBMENU);
-    return;
-  }
-  // A tap too short to engage: say so rather than doing nothing.
-  queueStatusNotice(NOTICE_CRUISE_HOLD);
-}
-
-// Reports the cruise state machine's outcome as a toast, and rebuilds the
-// cruise page when the live state changes so the engage button reads CANCEL
-// while cruise runs. Driven by the dashboard tick (100 ms) and the telemetry
-// poll (100 ms), so a request is reflected within about one tick.
 static void observeCruiseState() {
   CruiseOutcome outcome = CRUISE_OUTCOME_NONE;
   CruiseState state = CRUISE_STATE_OFF;
@@ -3141,8 +3044,11 @@ static void observeCruiseState() {
   }
   const bool active = state == CRUISE_STATE_ACTIVE;
   const bool stateChanged = cruiseStateKnown && active != cruiseReportedActive;
+  const uint32_t revision = controllerCruisePackageRevision();
+  const bool revisionChanged = cruiseStateKnown && revision != cruisePackageRevisionSeen;
   const bool rebuildNeeded =
-      stateChanged && currentScreen == SCREEN_SUBMENU && submenuType == SUBMENU_CRUISE && !rebuildQueued;
+      (stateChanged || revisionChanged) && currentScreen == SCREEN_SUBMENU &&
+      submenuType == SUBMENU_CRUISE && !rebuildQueued;
 
   // A state change rebuilds the cruise page, which deletes the toast it was
   // just created on. Queue the message in that case so loadScreen() delivers it
@@ -3155,10 +3061,11 @@ static void observeCruiseState() {
   if (!cruiseStateKnown) {
     cruiseStateKnown = true;
     cruiseReportedActive = active;
+    cruisePackageRevisionSeen = revision;
     return;
   }
-  if (!stateChanged) return;
   cruiseReportedActive = active;
+  cruisePackageRevisionSeen = revision;
   if (rebuildNeeded) queueLowMemoryRebuild(SCREEN_SUBMENU);
 }
 
@@ -6312,61 +6219,90 @@ static void showSubmenu() {
   if (submenuType == SUBMENU_CRUISE) {
     cruisePage = min<uint8_t>(cruisePage, 1);
     makeMenuTopBar(scr, vehicleSectionTitle(SUBMENU_CRUISE), cruisePage + 1, submenuItemCount(), true);
-    const bool supported = controllerSupportsCruise();
-    char value[24];
-    if (cruisePage == 0) {
-      makeMenuButton(scr, kMenuEdgeX, 48, kMenuContentW, 46,
-                     txt("CRUISE CONTROL", "VAKIONOPEUS", "TEMPOMAT", "RÉGULATEUR", "CONTROL CRUCERO", "CRUISE CONTROL"),
-                     cruiseControlEnabled ? txt("Enabled", "Päällä", "Aktiv", "Actif", "Activo", "Attivo")
-                                          : txt("Disabled", "Pois", "Aus", "Désactivé", "Desactivado", "Disattivo"),
-                     cruiseControlEnabled, BTN_OPTION_BASE + kCruiseOptEnable);
-      snprintf(value, sizeof(value), "%.1f s", cruiseHoldTimeDeciS / 10.0F);
-      makeMenuButton(scr, kMenuEdgeX, 102, kMenuContentW, 52,
-                     txt("HOLD TIME", "PITOAIKA", "HALTEZEIT", "MAINTIEN", "MANTENER", "TENUTA"), value, false,
-                     BTN_OPTION_BASE + kCruiseOptHold);
-      snprintf(value, sizeof(value), "%u km/h", cruiseMinSpeedKmh);
-      makeMenuButton(scr, kMenuEdgeX, 160, kTwoColLeftW, 52,
-                     txt("MIN SPEED", "MIN NOPEUS", "MIN-TEMPO", "VITESSE MIN", "VEL. MÍNIMA", "VEL. MINIMA"), value,
-                     false, BTN_OPTION_BASE + kCruiseOptMinSpeed);
-      snprintf(value, sizeof(value), "%u km/h", cruiseMaxSpeedKmh);
-      makeMenuButton(scr, kTwoColRightX, 160, kTwoColRightW, 52,
-                     txt("MAX SPEED", "MAX NOPEUS", "MAX-TEMPO", "VITESSE MAX", "VEL. MÁXIMA", "VEL. MASSIMA"),
-                     value, false, BTN_OPTION_BASE + kCruiseOptMaxSpeed);
-    } else {
-      const char *allowed = txt("Allowed", "Sallittu", "Erlaubt", "Autorisé", "Permitido", "Consentito");
-      makeMenuButton(scr, kMenuEdgeX, 48, kThreeColW, 50, "ECO", allowed,
-                     (cruiseAllowedModes & (1u << 0)) != 0, BTN_OPTION_BASE + kCruiseOptModeEco);
-      makeMenuButton(scr, kThreeColX1, 48, kThreeColW, 50, "DRIVE", allowed,
-                     (cruiseAllowedModes & (1u << 1)) != 0, BTN_OPTION_BASE + kCruiseOptModeDrive);
-      makeMenuButton(scr, kThreeColX2, 48, kThreeColW, 50, "SPORT", allowed,
-                     (cruiseAllowedModes & (1u << 2)) != 0, BTN_OPTION_BASE + kCruiseOptModeSport);
-      uint16_t targetKmh = 0;
-      const bool active = controllerCruiseActive(targetKmh);
-      char state[40];
-      if (active)
-        snprintf(state, sizeof(state), "%s %u km/h", txt("TARGET", "TAVOITE", "ZIEL", "CIBLE", "OBJETIVO", "OBIETTIVO"), targetKmh);
-      else
-        snprintf(state, sizeof(state), "%s", supported ? txt("Ready", "Valmis", "Bereit", "Prêt", "Listo", "Pronto")
-                                                       : txt("Not available", "Ei käytössä", "Nicht verfügbar", "Indisponible", "No disponible", "Non disponibile"));
-      lv_obj_t *engage = makeMenuButton(
-          scr, kMenuEdgeX, 108, kMenuContentW, 60,
-          active ? txt("CANCEL CRUISE", "PERUUTA VAKIONOPEUS", "TEMPOMAT ABBRECHEN", "ANNULER LE RÉGULATEUR",
-                       "CANCELAR CONTROL CRUCERO", "ANNULLA CRUISE")
-                 : txt("ENGAGE CRUISE", "KÄYTÄ VAKIONOPEUTTA", "TEMPOMAT AKTIVIEREN", "ACTIVER LE RÉGULATEUR",
-                       "ACTIVAR CONTROL CRUCERO", "ATTIVA CRUISE"),
-          state, active, BTN_OPTION_BASE + kCruiseOptEngage);
-      if (supported) {
-        lv_obj_remove_event_cb(engage, buttonEventCb);
-        lv_obj_add_event_cb(engage, cruiseEngageEventCb, LV_EVENT_ALL, NULL);
-        // Track the live button so its delete callback knows whether it is the
-        // one being torn down by a rebuild, and observeCruiseState can tell the
-        // rider the state machine's outcome.
-        cruiseEngageButton = engage;
-      }
+    CruisePackageSnapshot pkg = {};
+    const bool available = controllerCruisePackageSnapshot(pkg);
+    if (!available) controllerCruiseRequestSettings();
+    char value[48];
+    if (!available) {
+      makeMenuButton(scr, kMenuEdgeX, 58, kMenuContentW, 56,
+                     txt("CRUISE PACKAGE NOT FOUND", "VAKIONOPEUDEN PAKETTIA EI LÖYDY",
+                         "TEMPOMAT-PAKET NICHT GEFUNDEN", "PACKAGE RÉGULATEUR INTROUVABLE",
+                         "PAQUETE DE CRUCERO NO ENCONTRADO", "PACCHETTO CRUISE NON TROVATO"),
+                     "", false, BTN_OPTION_BASE + 90);
       makeExplanationAt(
-          scr, 172,
-          active ? txt("Tap to cancel. Braking or a fault releases it too.", "Peruuta napauttamalla. Jarrutus tai vika vapauttaa myös.", "Zum Abbrechen tippen. Bremsen oder Fehler löst ebenfalls.", "Touchez pour annuler. Freinage ou défaut libère aussi.", "Toca para cancelar. Frenar o un fallo también lo libera.", "Tocca per annullare. Frenata o guasto lo rilasciano.")
-                 : txt("Release the throttle, then hold to engage.", "Päästä kaasusta ja pidä painiketta.", "Gas loslassen, dann Knopf halten.", "Lâchez l'accélérateur, puis maintenez.", "Suelta el acelerador y mantén pulsado.", "Rilascia l'acceleratore, poi tieni premuto."));
+          scr, 130,
+          txt("Install the VESC Cruise Control package in VESC Tool and enable it. "
+              "The display only shows its state; it never drives the ADC override.",
+              "Asenna VESC Cruise Control -paketti VESC Toolissa ja ota se käyttöön. "
+              "Näyttö vain näyttää tilan; se ei ohjaa ADC-overridea.",
+              "Installiere das VESC-Cruise-Control-Paket in VESC Tool und aktiviere es. "
+              "Das Display zeigt nur den Zustand; es steuert das ADC-Override nicht.",
+              "Installez le package VESC Cruise Control dans VESC Tool et activez-le. "
+              "L'écran affiche seulement l'état ; il ne pilote pas l'ADC.",
+              "Instala el paquete VESC Cruise Control en VESC Tool y actívalo. "
+              "La pantalla solo muestra el estado; no controla el ADC.",
+              "Installa il pacchetto VESC Cruise Control in VESC Tool e attivalo. "
+              "Il display mostra solo lo stato; non pilota l'ADC."));
+      loadScreen(scr); return;
+    }
+
+    const bool active = pkg.state == CRUISE_PACKAGE_ON;
+    const bool engaging = pkg.state == CRUISE_PACKAGE_ENGAGING;
+    const char *stateText = active ? txt("CRUISE ON", "VAKIONOPEUS PÄÄLLÄ", "TEMPOMAT AN", "RÉGULATEUR ACTIF",
+                                         "CRUCERO ACTIVO", "CRUISE ATTIVO")
+                            : engaging ? txt("HOLD STEADY", "PIDÄ TASAINEN", "HALTEN", "MAINTENEZ",
+                                             "MANTÉN", "MANTIENI")
+                                       : txt("CRUISE OFF", "VAKIONOPEUS POIS", "TEMPOMAT AUS", "RÉGULATEUR INACTIF",
+                                             "CRUCERO INACTIVO", "CRUISE INATTIVO");
+    if (cruisePage == 0) {
+      makeMenuButton(scr, kMenuEdgeX, 44, kMenuContentW, 42,
+                     txt("VESC CRUISE PACKAGE", "VESC-VAKIONOPEUSPAKETTI", "VESC-TEMPOMAT-PAKET",
+                         "PACKAGE RÉGULATEUR VESC", "PAQUETE CRUCERO VESC", "PACCHETTO CRUISE VESC"),
+                     stateText, active, BTN_OPTION_BASE + 90);
+      snprintf(value, sizeof(value), "%.1f s", pkg.holdDeciS / 10.0F);
+      makeMenuButton(scr, kMenuEdgeX, 90, kMenuContentW, 42,
+                     txt("HOLD TIME", "PITOAIKA", "HALTEZEIT", "MAINTIEN", "MANTENER", "TENUTA"), value,
+                     false, BTN_OPTION_BASE + 90);
+      snprintf(value, sizeof(value), "%u km/h", pkg.minSpeedKmh);
+      makeMenuButton(scr, kMenuEdgeX, 136, kTwoColLeftW, 42,
+                     txt("MIN SPEED", "MIN NOPEUS", "MIN-TEMPO", "VITESSE MIN", "VEL. MÍNIMA", "VEL. MINIMA"),
+                     value, false, BTN_OPTION_BASE + 90);
+      snprintf(value, sizeof(value), "%u km/h", pkg.maxSpeedKmh);
+      makeMenuButton(scr, kTwoColRightX, 136, kTwoColRightW, 42,
+                     txt("MAX SPEED", "MAX NOPEUS", "MAX-TEMPO", "VITESSE MAX", "VEL. MÁXIMA", "VEL. MASSIMA"),
+                     value, false, BTN_OPTION_BASE + 90);
+      makeExplanationAt(
+          scr, 186,
+          txt("Hold the throttle steady for the hold time. Brake or pull past it to cancel.",
+              "Pidä kaasu tasaisena pitoajan. Jarru tai veto pidemmälle peruuttaa.",
+              "Gas ruhig halten. Bremsen oder weiter ziehen bricht ab.",
+              "Maintenez les gaz stables. Freiner ou tirer annule.",
+              "Mantén el gas estable. Frenar o tirar más cancela.",
+              "Tieni gas stabile. Frenare o tirare oltre annulla."));
+    } else {
+      makeMenuButton(scr, kMenuEdgeX, 44, kMenuContentW, 42,
+                     txt("LAST CANCEL", "VIIMEISIN PERUUTUS", "LETZTE AUFHEBUNG", "DERNIÈRE ANNULATION",
+                         "ÚLTIMA CANCELACIÓN", "ULTIMA ANNULLAMENTO"),
+                     cruisePackageCancelName(pkg), false, BTN_OPTION_BASE + 90);
+      makeMenuButton(scr, kMenuEdgeX, 90, kMenuContentW, 42,
+                     txt("LEGAL LOCK", "LAILLINEN RAJA", "RECHTLICHE SPERRE", "VERROU LÉGAL",
+                         "BLOQUEO LEGAL", "BLOCCO LEGALE"),
+                     pkg.legalLocked ? txt("Locked", "Lukittu", "Gesperrt", "Verrouillé", "Bloqueado", "Bloccato")
+                                     : txt("Unlocked", "Auki", "Offen", "Déverrouillé", "Desbloqueado", "Sbloccato"),
+                     false, BTN_OPTION_BASE + 90);
+      makeMenuButton(scr, kMenuEdgeX, 136, kMenuContentW, 42,
+                     txt("BEEPS", "ÄÄNET", "TÖNE", "BIPS", "PITIDOS", "BEEP"),
+                     pkg.beepsEnabled ? txt("On", "Päällä", "An", "Activés", "Activados", "Attivi")
+                                      : txt("Off", "Pois", "Aus", "Coupés", "Desactivados", "Disattivati"),
+                     false, BTN_OPTION_BASE + 90);
+      makeExplanationAt(
+          scr, 186,
+          txt("Configured in VESC Tool > App UI. The display only shows the package state.",
+              "Määritetään VESC Toolin App UI:ssa. Näyttö vain näyttää paketin tilan.",
+              "In VESC Tool > App UI einstellen. Das Display zeigt nur den Paketzustand.",
+              "Configuré dans VESC Tool > App UI. L'écran affiche seulement l'état.",
+              "Se configura en VESC Tool > App UI. La pantalla solo muestra el estado.",
+              "Configurato in VESC Tool > App UI. Il display mostra solo lo stato."));
     }
     loadScreen(scr); return;
   }

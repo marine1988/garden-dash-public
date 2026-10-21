@@ -4,6 +4,12 @@ Diagnosis for GD-3. The state machine in `cruise_control.cpp` is not the fault:
 all 40 host tests pass, 14 of them on cruise. The cruise fails on the scooter
 because of how the display talks to the VESC, not what it decides.
 
+> **Implementation note (0.02-rc2):** the display no longer drives the ADC
+> override itself. It integrates the `marine1988/vesc_cruise_control` package,
+> which runs on the VESC and engages by holding the throttle steady. The old
+> display-side design is kept below as the diagnosis that led to that change;
+> see [Resolution](#resolution-002-rc2).
+
 ## Summary
 
 The display engages cruise by sending `COMM_SET_RPM` and trusting the VESC's own
@@ -184,65 +190,32 @@ field and should be handled with the fix:
   `applications/app_adc.c` (the ADC thread and its cruise branch),
   `lispBM/lispif_vesc_extensions.c` (`app-adc-override`).
 
-## Resolution (GD-4)
+## Resolution (0.02-rc2)
 
-Option A is implemented. `cruise_control.cpp` still decides *when* cruise is on
-(the same state machine and safety order), but its output is now the LispBM
-expression the ADC application understands, not a periodic `SET_RPM`:
+The display no longer sends `app-adc-detach` or `app-adc-override`. It integrates
+the **VESC Cruise Control** package
+([marine1988/vesc_cruise_control](https://github.com/marine1988/vesc_cruise_control)),
+which runs on the controller and owns the throttle/brake pins and the ADC
+override. The display only queries and displays it:
 
-- **Engage** sends one expression, `(progn (app-adc-detach 2 1)
-  (app-adc-override 3 1))`. `progn` is one REPL command, which matters because
-  the firmware's LispBM REPL accepts only one command every 0.5 s
-  (`lispif.c:287`) — two packets would drop the second. Mode 2 of
-  `app-adc-detach` detaches the buttons but keeps the throttle attached
-  (`lispif_vesc_extensions.c:1807`), and target 3 of `app-adc-override` is the
-  cruise button (`app_adc.c:154`, `app_adc.c:319-332`). The ADC application then
-  holds the captured eRPM itself (`app_adc.c:548-572`), so nothing overwrites it.
-- **Release** sends `(app-adc-override 3 0)`: the throttle is handed back
-  untouched.
-- The two expressions travel over the existing `COMM_LISP_REPL_CMD` path in
-  `controller_backends.cpp`, wrapping them for CAN-forward exactly as a profile
-  write does.
-- One REPL slot is shared with profile writes. A cruise expression is queued
-  when the REPL is still inside its 0.5 s window, and the latest rider action
-  replaces a queued one, so a quick cancel cannot be lost behind an engage.
-- A repeated engage while cruise is running is ignored rather than re-evaluated.
-  The ADC application captures its setpoint on the transition into cruise, so a
-  second engage cannot retarget it; treating it as a fresh request could drop
-  the local state while the controller still held the old setpoint.
-- The dashboard shows the running cruise as a green `CRUISE <target>` chip over
-  the title, so the state is visible after leaving the cruise page. It hides on
-  release, brake, fault, or link loss.
+- The package sends `COMM_CUSTOM_APP_DATA` (36) lines. The display parses
+  `state <off|engaging|on|cancelling> <last-cancel> <locked|unlocked>` and
+  `cruise <enabled> <hold> <deadband> <min> <max> <legal> <debug> <beeps>`.
+- On connect, and when the cruise page opens without a package, the display asks
+  for the settings with `(send-settings)` over `COMM_LISP_REPL_CMD`. It retries
+  a few times because LispBM may still be starting; if the package is absent the
+  page says `CRUISE PACKAGE NOT FOUND`.
+- The cruise page is read-only: no engage/cancel button and no display-side
+  timing. The package engages when the throttle has been held steady for its
+  `hold time`; brake or pulling past the reference cancels. The page shows the
+  hold time, min/max speed, last cancel, legal lock and beeps.
+- The dashboard shows a green `CRUISE <speed>` chip whenever the package reports
+  `state on`. It hides on `cancelling`, `off`, fault, or link loss.
+- Nothing in the display touches the controller's ADC override while this
+  package is installed, so the two can no longer fight each other.
 
-Companion findings from the diagnosis are fixed:
-
-1. `cruiseControlEnabled == false` no longer shows a false `CRUISE ENGAGED`; the
-   engage path reports `CRUISE IS TURNED OFF` (`NOTICE_CRUISE_DISABLED`).
-2. A refused engage is no longer silent. The state machine publishes a
-   `CruiseOutcome`, and `observeCruiseState()` (the same edge pattern as
-   `observeProfileWriteNotices`) raises `RIDE FASTER TO CRUISE`,
-   `CRUISE OFF IN THIS MODE`, or `SET WHEEL SIZE FIRST` as appropriate.
-3. The dead `deadbandHundredths` setting is removed from the UI, the settings
-   store, and the runtime. It never had any effect, so dropping the stored key
-   needs no migration.
-4. The engage button reflects the live state: a state change rebuilds the cruise
-   page on the dashboard tick (outside the press), and a cancel tap clears a
-   stale hold flag so the `CLICKED` that follows is not swallowed.
-5. Brake check: a regenerative (negative battery-side) current below
-   `kCruiseBrakeRegenAmps` while cruising releases the cruise at once. A
-   mechanical brake is still covered by the release when speed falls below the
-   minimum, and by the tap-to-cancel.
-
-### Requirements that stay on the VESC
-
-The display cannot set these; they are VESC Tool settings:
-
-- **App → ADC → "Cruise control button" must be enabled** (bit 0 of
-  `app_conf.adc.buttons`). Its firmware default is 0 (`appconf_default.h:180`),
-  and with it off the ADC application forces `cc_button` false
-  (`app_adc.c:330`), so cruise never engages. There is no LispBM binding for the
-  app ADC configuration, so this cannot be driven from the display.
-- **The throttle must be at rest when engaging** (`fabsf(pwr) < 0.001`,
-  `app_adc.c:548`). The display cannot read the throttle over standard telemetry,
-  so it guides the rider ("Release the throttle, then hold to engage") and the
-  controller refuses the engage safely if the throttle is applied.
+The package itself still needs the VESC ADC application configured (throttle on
+ADC1, brake on ADC2, a current/duty control type). Its own App UI in VESC Tool
+remains the place to configure hold time, deadband, legal lock and beeps; the
+display mirrors those values. The package README documents the wiring and the
+legal-lock gesture.

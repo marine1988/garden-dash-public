@@ -20,6 +20,10 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
+## 2026-10-21 — VESC cruise package
+
+Cruise follows the VESC package; the display shows state/settings, no button.
+
 ## 2026-10-21 — Profile and cruise fixes
 
 Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.

@@ -247,52 +247,43 @@ standard telemetry does not report a profile. Back traverses pages before
 returning to the parent; Next is absent on the final page. Field editors preserve
 the originating section and page. Use `makeMenuTopBar`, without extra arrows.
 
-Controller configuration writes are not implemented by any backend, so no card
-here claims to change the controller's own limits. Gauge ranges are explicitly
-local display scales, never controller limits. Power & Current was a dead end (a
-notice telling the rider to use VESC Tool), so it and the VESC-side Ride Modes
-card are gone: the Configuration hub offers only cards that do something. Future
-write support must use separate confirmed and pending settings, explicit
-application, and read-back verification. Do not connect the existing gauge-scale
-globals to controller configuration writes.
+Controller profile writes are implemented only by the VESC backends, through the
+confirmed APPLY path below. Gauge ranges are explicitly local display scales,
+never controller limits. Power & Current was a dead end (a notice telling the
+rider to use VESC Tool), so it and the VESC-side Ride Modes card are gone: the
+Configuration hub offers only cards that do something. Future write support must
+use separate confirmed and pending settings, explicit application, and read-back
+verification. Do not connect the existing gauge-scale globals to controller
+configuration writes.
 
-Cruise Control and Profiles are the hub's other two cards (`controllerConfigSections`
-builds the list, so the screen and its handler cannot disagree): Ride Modes stays
-only on FarDriver, which reports gears, and Cruise only on a VESC link. Cruise
-holds the current speed with the VESC's own `COMM_SET_RPM` setpoint: the engage
-tile is a hold of `cruiseHoldTimeDeciS`, a tap cancels at once, and the telemetry
-task releases on a controller fault, a lost link, or speed dropping under
-`cruiseMinSpeedKmh`. Its four numbers are edited through `INPUT_CRUISE_VALUE`
-rather than the vehicle-field editor, because they are their own globals.
+Cruise Control and Profiles are the hub's other two cards
+(`controllerConfigSections` builds the list, so the screen and its handler cannot
+disagree). Ride Modes stays only on FarDriver, which reports gears.
 
-Profiles is four pages, modelled on VESC Tool's own profiles and, unlike
-everything above, they are written to the controller. Slots (page 1) list three
-saved setups: tapping one selects it for editing, and an empty one is filled
-from the current display setup first. Controller limits (page 2) is the five
-numbers VESC Tool's profiles carry -- forward and reverse speed limits, the
-drive and brake current scales, and the field-weakening current -- entered with
-the shared numeric editor; these go to the controller when the profile is
-applied. Display extras (page 3) is the cruise ceiling, gauge full scale and the
-battery, motor, continuous and peak power figures: kept with the profile, never
-sent anywhere. Apply and manage (page 4) applies the profile after a
-confirmation, re-captures the display extras, or clears the slot.
+Cruise is offered only on a VESC link and integrates the
+[VESC Cruise Control](https://github.com/marine1988/vesc_cruise_control)
+package. The package runs on the controller, watches the throttle and brake
+pins, and engages when the throttle has been held steady for its configured
+hold time. The display page is read-only: it shows the package state, hold time,
+min/max speed, last cancel, legal lock and beeps, and has no engage/cancel
+button. On connect and when the page opens without a package it asks for the
+settings with `(send-settings)`; if nothing answers it says
+`CRUISE PACKAGE NOT FOUND`. The display never sends its own ADC override while
+this package is installed. The dashboard chip is described above.
 
-Applying writes the speed limits and current scales with COMM_SET_MCCONF_TEMP
-and store=0, so they land in the controller's RAM and never in its flash -- the
-same path VESC Tool uses. Field weakening has no field in that command, so it
-goes out as the LispBM expression the scooter-support package uses,
-`(conf-set 'foc-fw-current-max N)`, which also applies in RAM. Because
-SET_MCCONF_TEMP writes every field it carries, the task reads the controller's
-current limits first (COMM_GET_MCCONF_TEMP) and echoes the duty and power limits
-back unchanged, so a profile cannot silently widen them. It then reads the
-limits back and only reports the profile applied when the reply matches; the
-limits page shows that read-back on its CTRL line. The three steps run on the
-telemetry task (it owns the transport), paced by the LispBM REPL's one-command-
-per-0.5 s limit, exactly like cruise control. None of this touches the flash, so
-the write path above stays reserved for a future, separately confirmed feature.
-Native states `34_controller_hub`, `34_cruise_window`, `34_cruise_modes`,
-`34_profiles_slots`, `34_profiles_limits`, `34_profiles_extras` and
-`34_profiles_manage` cover them; check Finnish and German as usual.
+Profiles is three pages. Slots (page 1) lists the three named profiles: tapping
+one selects it for editing, and the badge follows the selection. Limits (page 2)
+edits the six fields the controller understands. Apply/reset (page 3) writes the
+slot to the controller after a confirmation, then reads the controller's own
+numbers back and only reports CONFIRMED when they match. The whole profile is one
+LispBM expression of `(conf-set ...)` forms: it applies in RAM, changes only the
+fields named, and never writes the controller's flash. The read-back uses
+`COMM_GET_MCCONF_TEMP`; the page's `CTRL` line shows the controller's values
+rather than the display's. Selecting a profile is not a write; only a confirmed
+APPLY is replayed after a reconnect. Native states `34_controller_hub`,
+`34_cruise_window`, `34_cruise_modes`, `34_profiles_slots`,
+`34_profiles_limits` and `34_profiles_apply` cover them; check Finnish and
+German as usual.
 
 Native states `19_controller_config_*`, `20_connection_*`,
 `21_calibration`, `21_gauge_ranges`, `22_modes_*`, `23_mode_labels` and

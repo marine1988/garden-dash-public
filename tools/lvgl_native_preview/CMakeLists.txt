@@ -27,6 +27,7 @@ set(FIRMWARE_SOURCES
   "${PROJECT_ROOT}/src/lvgl_app/app_logic.cpp"
   "${PROJECT_ROOT}/src/lvgl_app/controller_manager.cpp"
   "${PROJECT_ROOT}/src/lvgl_app/cruise_control.cpp"
+  "${PROJECT_ROOT}/src/lvgl_app/cruise_package.cpp"
   "${PROJECT_ROOT}/src/lvgl_app/vesc_profile.cpp"
   "${PROJECT_ROOT}/src/lvgl_app/cyd_icons_1bit.cpp"
   "${PROJECT_ROOT}/src/lvgl_app/dashboards.cpp"
@@ -164,6 +165,10 @@ if(CYD_BUILD_TESTS OR CYD_BUILD_SIMULATOR)
                  "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_protocol.cpp")
   target_include_directories(cyd_cruise_control_test PRIVATE "${PROJECT_ROOT}/src/lvgl_app")
   add_test(NAME cyd_cruise_control COMMAND cyd_cruise_control_test)
+  add_executable(cyd_cruise_package_test cruise_package_test.cpp
+                 "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/cruise_package.cpp")
+  target_include_directories(cyd_cruise_package_test PRIVATE "${PROJECT_ROOT}/src/lvgl_app")
+  add_test(NAME cyd_cruise_package COMMAND cyd_cruise_package_test)
   add_executable(cyd_vesc_profile_test vesc_profile_test.cpp
                  "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_profile.cpp"
                  "${CMAKE_CURRENT_LIST_DIR}/../../src/lvgl_app/vesc_protocol.cpp")

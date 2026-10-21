@@ -27,6 +27,10 @@ enum : uint8_t {
   VESC_COMM_SET_CURRENT_BRAKE = 7,
   VESC_COMM_SET_RPM = 8,
   VESC_COMM_FORWARD_CAN = 34,
+  // A text line from an installed LispBM package (the cruise package uses it
+  // for its settings/state replies). Payload byte 0 is the command, the rest
+  // is the line without a trailing NUL.
+  VESC_COMM_CUSTOM_APP_DATA = 36,
   VESC_COMM_GET_VALUES_SETUP = 47,
   // Reads the controller's live profile numbers -- current scales, speed (ERPM),
   // duty and power limits -- to confirm a write and to show the rider what the

@@ -6,7 +6,8 @@
 
 #include "app_state.h"
 #include "config.h"
-#include "cruise_control.h"
+#include "cruise_control.h"  // CruiseOutcome/CruiseState, for the existing UI API
+#include "cruise_package.h"
 #include "fardriver_ble.h"
 #include "vesc_ble.h"
 #include "vesc_profile.h"
@@ -116,12 +117,18 @@ bool pendingCruiseLispActive = false;
 uint32_t vescConnectedAtMs = 0;
 bool profileReapplyPending = false;
 
-// Cruise control state, owned by the telemetry task. The request slot and the
-// published runtime share one critical section: the UI writes a request and
-// reads the active state, the task drains the request and writes the state.
+// Cruise state comes from the vesc_cruise_control LispBM package, not from a
+// display-side state machine. The package owns the throttle/brake pins and the
+// ADC override; the display only queries and displays it.
 portMUX_TYPE cruiseMux = portMUX_INITIALIZER_UNLOCKED;
-volatile uint8_t cruiseRequestPending = 0;  // 0 none, 1 engage, 2 disengage
-CruiseRuntime cruiseRuntime = {};
+CruisePackageSnapshot cruisePackage = {false, CRUISE_PACKAGE_UNAVAILABLE, "none", false,
+                                       true, 50, 10, 5, 25, false, false, true};
+uint16_t cruisePackageTargetKmh = 0;
+uint32_t cruisePackageRevision = 0;
+uint32_t cruisePackageLastLineMs = 0;
+uint32_t cruisePackageLastQueryMs = 0;
+bool cruisePackageSettingsSeen = false;
+uint8_t cruisePackageQueryAttempts = 0;
 CruiseOutcome cruiseOutcome = CRUISE_OUTCOME_NONE;  // edge, cleared as read by the UI
 
 // Profile write state, owned by the telemetry task. The UI leaves a slot number
@@ -206,8 +213,16 @@ void resetVescSession() {
   profileStepDueMs = 0;
   profileStepConfirmRetries = 0;
   portENTER_CRITICAL(&cruiseMux);
-  cruiseRequestPending = 0;
+  cruisePackage.available = false;
+  cruisePackage.state = CRUISE_PACKAGE_UNAVAILABLE;
+  cruisePackageTargetKmh = 0;
+  cruisePackageRevision++;
+  cruiseOutcome = CRUISE_OUTCOME_NONE;
   portEXIT_CRITICAL(&cruiseMux);
+  cruisePackageSettingsSeen = false;
+  cruisePackageLastLineMs = 0;
+  cruisePackageLastQueryMs = 0;
+  cruisePackageQueryAttempts = 0;
   // The values page must not keep showing numbers from the previous link.
   portENTER_CRITICAL(&profileMux);
   vescLiveProfileValid = false;
@@ -272,6 +287,64 @@ void vescRecordLispReply(const uint8_t *payload, size_t len) {
   gardenLogf("VESC Lisp reply: %s\n", lastLispReply);
 }
 
+CruiseOutcome cruisePackageCancelOutcome(const char *cancel) {
+  if (!cancel) return CRUISE_OUTCOME_RELEASED_CANCEL;
+  if (strcmp(cancel, "brake") == 0) return CRUISE_OUTCOME_RELEASED_BRAKE;
+  if (strcmp(cancel, "speed_low") == 0) return CRUISE_OUTCOME_RELEASED_SPEED;
+  if (strcmp(cancel, "overspeed") == 0) return CRUISE_OUTCOME_RELEASED_SPEED;
+  if (strcmp(cancel, "script_restart") == 0) return CRUISE_OUTCOME_RELEASED_LINK;
+  return CRUISE_OUTCOME_RELEASED_CANCEL;
+}
+
+bool sameCruisePackageSettings(const CruisePackageSnapshot &a, const CruisePackageSnapshot &b) {
+  return a.enabled == b.enabled && a.holdDeciS == b.holdDeciS &&
+         a.deadbandHundredths == b.deadbandHundredths && a.minSpeedKmh == b.minSpeedKmh &&
+         a.maxSpeedKmh == b.maxSpeedKmh && a.legalEnabled == b.legalEnabled &&
+         a.debugEnabled == b.debugEnabled && a.beepsEnabled == b.beepsEnabled;
+}
+
+// COMM_CUSTOM_APP_DATA from the installed cruise package. The package sends its
+// state once per second and its settings when asked; both are plain text after
+// the command byte. This is the only way the display learns the package's
+// state, because the package owns the ADC override.
+void vescHandleCustomAppData(const uint8_t *payload, size_t len) {
+  if (!payload || len < 2) return;
+  char line[128];
+  size_t copy = 0;
+  while (copy < len - 1 && copy + 1 < sizeof(line) && payload[copy + 1] != '\0') {
+    line[copy] = (char)payload[copy + 1];
+    copy++;
+  }
+  line[copy] = '\0';
+
+  CruisePackageSnapshot current = {};
+  portENTER_CRITICAL(&cruiseMux);
+  current = cruisePackage;
+  portEXIT_CRITICAL(&cruiseMux);
+
+  CruisePackageSnapshot next = current;
+  if (!cruisePackageParseLine(line, next)) return;
+  next.available = true;
+  if (strncmp(line, "cruise ", 7) == 0) cruisePackageSettingsSeen = true;
+
+  portENTER_CRITICAL(&cruiseMux);
+  const CruisePackageState previousState = cruisePackage.state;
+  const bool changed = !cruisePackage.available || previousState != next.state ||
+                       strcmp(cruisePackage.lastCancel, next.lastCancel) != 0 ||
+                       cruisePackage.legalLocked != next.legalLocked ||
+                       !sameCruisePackageSettings(cruisePackage, next);
+  cruisePackage = next;
+  if (changed) cruisePackageRevision++;
+  if (previousState != CRUISE_PACKAGE_ON && next.state == CRUISE_PACKAGE_ON) {
+    cruiseOutcome = CRUISE_OUTCOME_ENGAGED;
+  } else if (previousState == CRUISE_PACKAGE_ON && next.state != CRUISE_PACKAGE_ON) {
+    cruiseOutcome = cruisePackageCancelOutcome(next.lastCancel);
+  }
+  portEXIT_CRITICAL(&cruiseMux);
+  cruisePackageLastLineMs = millis();
+  cruisePackageQueryAttempts = 0;
+}
+
 // Sends one expression and starts the REPL gap. Returns false when the
 // expression could not be built or handed to the transport. The CAN-forward
 // prefix is written in front of the Lisp payload directly, so no second copy is
@@ -329,22 +402,37 @@ void vescCheckCruiseReply() {
   if (!cruiseLispAwaitingReply || !cruiseReplySeen) return;
   cruiseLispAwaitingReply = false;
   if (cruiseReplyOk) return;
+
+  // The package did not understand the query. That means it is not installed,
+  // not that a running cruise failed: the package owns the ADC override and
+  // nothing in the display can cancel it.
   bool wasActive = false;
+  bool wasAvailable = false;
   portENTER_CRITICAL(&cruiseMux);
-  if (cruiseRuntime.state == CRUISE_STATE_ACTIVE) {
-    cruiseRuntime.state = CRUISE_STATE_OFF;
-    cruiseRuntime.targetKmh = 0;
-    cruiseRuntime.rpmPerKmh = 0.0F;
-    cruiseOutcome = CRUISE_OUTCOME_FAILED;
-    wasActive = true;
-  }
+  wasActive = cruisePackage.state == CRUISE_PACKAGE_ON;
+  wasAvailable = cruisePackage.available;
+  cruisePackage.available = false;
+  cruisePackage.state = CRUISE_PACKAGE_UNAVAILABLE;
+  cruisePackageRevision++;
+  if (wasActive) cruiseOutcome = CRUISE_OUTCOME_FAILED;
   portEXIT_CRITICAL(&cruiseMux);
-  if (wasActive) {
-    // The engage expression is a progn: detach may have run before the
-    // override failed. Give the controller's buttons back on the next REPL slot.
-    vescQueueCruiseLisp(kCruiseLispDetachUndo);
-    gardenLogf("cruise: controller rejected the command: %s\n", lastLispReply);
-  }
+  if (wasAvailable) gardenLogf("cruise: package query rejected: %s\n", lastLispReply);
+}
+
+// Asks the installed package for its state/settings when it has not spoken for
+// a while. The package normally sends state once per second on its own, so this
+// is only a fallback and a way to discover a missing package.
+void vescCruisePackageStep(uint32_t now) {
+  if (!vescConnected) return;
+  if (now - vescConnectedAtMs < 1000) return;
+  const bool stateStale = cruisePackageLastLineMs == 0 || now - cruisePackageLastLineMs > 5000;
+  const bool needSettings = !cruisePackageSettingsSeen;
+  if (!stateStale && !needSettings) return;
+  if (cruisePackageQueryAttempts >= 5) return;
+  if (now - cruisePackageLastQueryMs < 2000) return;
+  cruisePackageLastQueryMs = now;
+  cruisePackageQueryAttempts++;
+  vescQueueCruiseLisp(needSettings ? "(send-settings)" : "(send-state)");
 }
 
 bool vescReadByte(uint8_t &out, uint32_t deadline) {
@@ -399,6 +487,10 @@ int vescRequest(uint8_t command, uint8_t *msg, size_t capacity) {
     if (len <= 0) return -1;
     if (msg[0] == VESC_COMM_LISP_REPL_CMD) {
       vescRecordLispReply(msg, (size_t)len);
+      continue;
+    }
+    if (msg[0] == VESC_COMM_CUSTOM_APP_DATA) {
+      vescHandleCustomAppData(msg, (size_t)len);
       continue;
     }
     if (msg[0] == command) return len;
@@ -753,10 +845,15 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
       // locally, with no display involved. Drop the display-side state so a
       // reconnect does not resume silently.
       portENTER_CRITICAL(&cruiseMux);
-      cruiseRuntime.state = CRUISE_STATE_OFF;
-      cruiseRuntime.targetKmh = 0;
-      cruiseRuntime.rpmPerKmh = 0.0F;
+      cruisePackage.available = false;
+      cruisePackage.state = CRUISE_PACKAGE_UNAVAILABLE;
+      cruisePackageTargetKmh = 0;
+      cruisePackageRevision++;
       portEXIT_CRITICAL(&cruiseMux);
+      cruisePackageSettingsSeen = false;
+      cruisePackageLastLineMs = 0;
+      cruisePackageLastQueryMs = 0;
+      cruisePackageQueryAttempts = 0;
       // A write in flight cannot finish on a dead link: report it failed and drop
       // the step, so it does not resume mid-sequence when the link returns.
       if (profileStepState != kProfileStepIdle) {
@@ -788,11 +885,15 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     // A fresh link starts with cruise idle: whatever was commanded belonged to
     // the previous session and must not resume silently.
     portENTER_CRITICAL(&cruiseMux);
-    cruiseRuntime.state = CRUISE_STATE_OFF;
-    cruiseRuntime.targetKmh = 0;
-    cruiseRuntime.rpmPerKmh = 0.0F;
-    cruiseRequestPending = 0;
+    cruisePackage.available = false;
+    cruisePackage.state = CRUISE_PACKAGE_UNAVAILABLE;
+    cruisePackageTargetKmh = 0;
+    cruisePackageRevision++;
     portEXIT_CRITICAL(&cruiseMux);
+    cruisePackageSettingsSeen = false;
+    cruisePackageLastLineMs = 0;
+    cruisePackageLastQueryMs = 0;
+    cruisePackageQueryAttempts = 0;
     // Re-apply the profile the rider actually applied on every reconnect. The
     // controller's limits live in RAM only (conf-set, no store), so a power
     // cycle or link drop wipes them. Selecting a slot in the menu is not an
@@ -823,45 +924,13 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
                               ? polePairs * driveRatio / (circumference * 0.06F * trim)
                               : 0.0F;
 
-  // Cruise control runs on the sample just built, from the telemetry task that
-  // owns the transport. The settings are the display's own globals, read here
-  // exactly as the drivetrain figures above are.
-  {
-    uint8_t request = 0;
-    portENTER_CRITICAL(&cruiseMux);
-    request = cruiseRequestPending;
-    cruiseRequestPending = 0;
-    portEXIT_CRITICAL(&cruiseMux);
-
-    CruiseSettings settings = {};
-    settings.enabled = cruiseControlEnabled;
-    settings.holdTimeDeciS = cruiseHoldTimeDeciS;
-    settings.minSpeedKmh = cruiseMinSpeedKmh;
-    settings.maxSpeedKmh = cruiseMaxSpeedKmh;
-    settings.allowedModes = cruiseAllowedModes;
-
-    CruiseInputs inputs = {};
-    inputs.speedKmh = (float)out.values.speedKmh;
-    inputs.rpm = vescData.rpm;
-    inputs.faultCode = (uint8_t)vescData.faultCode;
-    // A regenerative current while cruising is the rider braking; the state
-    // machine reads the sign to release the cruise at once.
-    inputs.avgInputCurrent = vescData.avgInputCurrent;
-    // VESC standard telemetry carries no ride mode, so the mode filter cannot
-    // reject anything; cruiseModeAllowed treats 0 as "not reported".
-    inputs.rideMode = 0;
-    inputs.linkLive = true;  // this poll just produced a sample
-    inputs.rpmPerKmh = rpmPerKmh;
-
-    CruiseOutput control = {};
-    portENTER_CRITICAL(&cruiseMux);
-    control = cruiseControlStep(cruiseRuntime, settings, inputs, request == 1, request == 2, now);
-    // Publish edges only. A NONE from the next poll must not erase an outcome
-    // the UI has not read yet: both sides run at about 100 ms.
-    if (control.outcome != CRUISE_OUTCOME_NONE) cruiseOutcome = control.outcome;
-    portEXIT_CRITICAL(&cruiseMux);
-    if (control.send) vescCruiseSendLisp(control.lisp);
-  }
+  // The installed vesc_cruise_control package owns the cruise. The display
+  // only mirrors its state and, while it is ON, keeps the speed it is holding
+  // for the dashboard chip.
+  portENTER_CRITICAL(&cruiseMux);
+  if (cruisePackage.state == CRUISE_PACKAGE_ON) cruisePackageTargetKmh = (uint16_t)out.values.speedKmh;
+  portEXIT_CRITICAL(&cruiseMux);
+  vescCruisePackageStep(now);
 
   // A profile is re-applied only after the link has been stable for a moment,
   // and only when no other write is already in flight. This is deliberately
@@ -887,17 +956,10 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
   return CONTROLLER_POLL_UPDATED;
 }
 
-void vescCruiseRequestEngage() {
-  portENTER_CRITICAL(&cruiseMux);
-  cruiseRequestPending = 1;
-  portEXIT_CRITICAL(&cruiseMux);
-}
-
-void vescCruiseRequestDisengage() {
-  portENTER_CRITICAL(&cruiseMux);
-  cruiseRequestPending = 2;
-  portEXIT_CRITICAL(&cruiseMux);
-}
+// The package engages and releases by itself; there is no display-side button.
+// These stay as no-ops so the manager/UI API remains compatible.
+void vescCruiseRequestEngage() {}
+void vescCruiseRequestDisengage() {}
 
 void vescProfileRequestWrite(uint8_t index) {
   // Only the slot is queued here. The report becomes SENT when the telemetry
@@ -926,8 +988,8 @@ bool vescProfileReadBackCopy(VescMcconfTemp &out) {
 bool vescCruiseActive(uint16_t &targetKmh) {
   bool active = false;
   portENTER_CRITICAL(&cruiseMux);
-  active = cruiseRuntime.state == CRUISE_STATE_ACTIVE;
-  if (active) targetKmh = cruiseRuntime.targetKmh;
+  active = cruisePackage.available && cruisePackage.state == CRUISE_PACKAGE_ON;
+  if (active) targetKmh = cruisePackageTargetKmh;
   portEXIT_CRITICAL(&cruiseMux);
   return active;
 }
@@ -939,8 +1001,29 @@ void vescCruiseOutcome(CruiseOutcome &outcome, CruiseState &state) {
   // it set made every tick re-deliver the same toast ("CRUISE ENGAGED" kept
   // appearing while the cruise ran) and hid the next real transition.
   cruiseOutcome = CRUISE_OUTCOME_NONE;
-  state = cruiseRuntime.state;
+  state = cruisePackage.state == CRUISE_PACKAGE_ON ? CRUISE_STATE_ACTIVE : CRUISE_STATE_OFF;
   portEXIT_CRITICAL(&cruiseMux);
+}
+
+bool vescCruisePackageSnapshot(CruisePackageSnapshot &out) {
+  portENTER_CRITICAL(&cruiseMux);
+  out = cruisePackage;
+  const bool available = cruisePackage.available;
+  portEXIT_CRITICAL(&cruiseMux);
+  return available;
+}
+
+uint32_t vescCruisePackageRevision() {
+  portENTER_CRITICAL(&cruiseMux);
+  const uint32_t revision = cruisePackageRevision;
+  portEXIT_CRITICAL(&cruiseMux);
+  return revision;
+}
+
+void vescCruiseRequestSettings() {
+  // Queue a settings query for the telemetry task. The UI calls this when the
+  // cruise page opens; the package answers on COMM_CUSTOM_APP_DATA.
+  vescQueueCruiseLisp("(send-settings)");
 }
 
 void farDriverBackendBegin() {
