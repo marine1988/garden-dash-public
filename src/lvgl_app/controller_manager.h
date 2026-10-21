@@ -34,7 +34,7 @@ enum TelemetryField : uint32_t {
   TELEMETRY_FIELD_FAULT = 1UL << 22,
   TELEMETRY_FIELD_RIDE_MODE = 1UL << 23,
   // Phase current is a separate reading from pack current, and not every
-  // controller reports it — Fardriver's electrical frame carries one figure.
+  // controller reports it.
   TELEMETRY_FIELD_MOTOR_CURRENT = 1UL << 24,
   TELEMETRY_FIELD_DUTY = 1UL << 25,
   TELEMETRY_FIELD_PHASE_VOLTAGE = 1UL << 26,
@@ -144,40 +144,22 @@ struct ControllerLinkStatus {
   uint32_t revision;
 };
 
-struct ControllerLinkDiagnostics {
-  char serviceUuid[40];
-  char characteristicUuid[40];
-  char lastPacketHex[64];
-  uint32_t frameCount;
-  uint32_t crcFailCount;
-  uint32_t discardedBytes;
-  uint16_t lastPacketLength;
-  uint8_t lastFrameId;
-  int8_t connectedRssi;
-};
-
 struct ControllerCapabilities {
   bool showsDeviceList;
   bool usesWiredLink;
   bool hasCanTarget;
-  bool hasLinkDiagnostics;
-  bool readsConfiguration;
-  bool writesConfiguration;
   bool reportsRideMode;
   // True when the link accepts the VESC SET_* control commands, so the display
-  // can hold a cruise setpoint. False for the FarDriver link, which has no
-  // equivalent command.
+  // can hold a cruise setpoint.
   bool supportsCruiseControl;
   // True when the link accepts COMM_SET_MCCONF_TEMP and the LispBM field
-  // weakening command, so a profile can be written to the controller. False for
-  // the FarDriver link, which has no equivalent.
+  // weakening command, so a profile can be written to the controller.
   bool supportsProfileWrite;
 };
 
 enum ControllerBackendId : uint8_t {
   CONTROLLER_ID_VESC_UART = 1,
   CONTROLLER_ID_VESC_BLE = 2,
-  CONTROLLER_ID_FARDRIVER_BLE = 3,
 };
 
 enum ControllerTransport : uint8_t {
@@ -207,7 +189,6 @@ struct ControllerBackend {
   // needs no pairing (UART). The manager calls it to recover a dropped link.
   void (*reconnectSaved)();
   ControllerLinkStatus (*linkStatus)();
-  bool (*diagnostics)(ControllerLinkDiagnostics &out);
   ControllerPollResult (*poll)(ControllerSample &out);
   uint16_t pollIntervalMs;
   uint16_t taskStackBytes;
@@ -216,20 +197,19 @@ struct ControllerBackend {
 uint8_t controllerBackendCount();
 const ControllerBackend *activeControllerBackend();
 const ControllerBackend *controllerBackendById(ControllerBackendId id);
-ControllerBackendId controllerBackendIdFor(ControllerType type, ControllerConnection connection);
-void controllerSelectionForId(ControllerBackendId id, ControllerType &type, ControllerConnection &connection);
+ControllerBackendId controllerBackendIdFor(ControllerConnection connection);
+ControllerConnection controllerConnectionForId(ControllerBackendId id);
 
 const ControllerCapabilities &controllerCapabilities();
 const char *controllerTypeName();
-bool controllerUsesFarDriverBle();
 bool controllerUsesVescBle();
 bool controllerUsesBluetooth();
 
 void controllerManagerBegin();
-// Change the selected controller without restarting the display. Returns true
-// when a switch was started; the telemetry task performs it asynchronously
-// because the old backend's radio has to be handed back first.
-bool controllerManagerSwitchTo(ControllerType type, ControllerConnection connection);
+// Change the selected VESC transport without restarting the display. Returns
+// true when a switch was started; the telemetry task performs it
+// asynchronously because the old backend's radio has to be handed back first.
+bool controllerManagerSwitchTo(ControllerConnection connection);
 // Hand the single NimBLE client slot to the backend being set up. The display
 // can hold one BLE client at a time, so scanning for a controller other than
 // the running one means taking the radio from it first. Returns true once
@@ -255,10 +235,9 @@ bool controllerQuiesceForCompanion();
 ControllerSnapshot controllerSnapshot();
 
 // Cruise control, driven by the telemetry task that owns the controller link.
-// `controllerSupportsCruise()` is false on a FarDriver link and on the host
-// preview, where the engage calls are no-ops. A request is applied on the task's
-// next poll, so `controllerCruiseActive()` reflects the state one poll later;
-// engage and disengage are edge requests, not levels.
+// A request is applied on the task's next poll, so `controllerCruiseActive()`
+// reflects the state one poll later; engage and disengage are edge requests,
+// not levels.
 bool controllerSupportsCruise();
 void controllerCruiseEngage();
 void controllerCruiseDisengage();
@@ -272,9 +251,8 @@ void controllerCruiseOutcome(CruiseOutcome &outcome, CruiseState &state);
 void controllerCruiseState(CruiseState &state);
 uint8_t controllerCruiseHoldProgress();
 
-// Controller profiles written to the link. `controllerSupportsProfileWrite()` is
-// false on a FarDriver link and on the host preview, where the write is a no-op.
-// `controllerProfileWrite()` queues the slot for the telemetry task; poll
+// Controller profiles written to the link. `controllerProfileWrite()` queues
+// the slot for the telemetry task; poll
 // `controllerProfileWriteReport()` for the outcome (it reaches CONFIRMED only
 // after the controller reports the new limits back).
 bool controllerSupportsProfileWrite();

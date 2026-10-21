@@ -17,7 +17,6 @@ enum ScreenMode {
   SCREEN_PIN_SETUP,
   SCREEN_PIN_LOCK,
   SCREEN_TOUCH_TEST,
-  SCREEN_FARDRIVER_BLE,
   SCREEN_RIDE_LOGS,
   SCREEN_FIRMWARE_UPDATE,
   SCREEN_COMPANION_MODE,
@@ -122,15 +121,9 @@ enum DisplayPanelProfile : uint8_t {
   DISPLAY_PANEL_COUNT,
 };
 
-// Selects the one controller transport that owns live telemetry.  This is
-// deliberately separate from controllerName, which is editable vehicle
-// metadata shown in a few information views.
-enum ControllerType : uint8_t {
-  CONTROLLER_VESC,
-  CONTROLLER_FARDRIVER,
-  CONTROLLER_TYPE_COUNT,
-};
-
+// Selects the VESC transport that owns live telemetry. This is deliberately
+// separate from controllerName, which is editable vehicle metadata shown in a
+// few information views.
 enum ControllerConnection : uint8_t {
   CONTROLLER_CONNECTION_UART,
   CONTROLLER_CONNECTION_BLE,
@@ -418,10 +411,10 @@ float drivetrainRpmPerKmh();
 // Cruise control settings, applied by the controller backend from the telemetry
 // task. Persisted with the rest of the app settings.
 extern bool cruiseControlEnabled;
-extern uint16_t cruiseHoldTimeDeciS;       // press-and-hold to engage, tenths of a second
+extern uint16_t cruiseHoldTimeDeciS;       // steady speed before automatic engage, tenths of a second
 extern uint16_t cruiseMinSpeedKmh;
 extern uint16_t cruiseMaxSpeedKmh;
-extern uint8_t cruiseAllowedModes;         // bit (1 << (mode-1)); 0 refuses every reported mode
+extern uint8_t cruiseAllowedModes;         // retained stored setting; VESC telemetry reports no mode
 
 // Settings / state (defined in app_logic.cpp)
 extern DashboardMode dashboardMode;
@@ -487,7 +480,6 @@ extern bool themeLedEnabled;  // LED1 ambient light follows the theme color
 // deliberately.
 extern bool bluetoothEnabled;
 extern DisplayPanelProfile displayPanelProfile;
-extern ControllerType controllerType;
 extern ControllerConnection controllerConnection;
 extern bool developerOptionsEnabled;
 extern bool dashboardDemoModeEnabled;

@@ -7,7 +7,6 @@
 #include "app_state.h"
 #include "config.h"
 #include "cruise_control.h"
-#include "fardriver_ble.h"
 #include "vesc_ble.h"
 #include "vesc_profile.h"
 #include "vesc_protocol.h"
@@ -40,11 +39,6 @@ bool setupValuesProbed = false;
 VescSetupValues liveSetup = {};
 bool liveSetupValid = false;
 uint8_t setupFailures = 0;
-
-float farDriverTripKm = 0.0F;
-uint32_t farDriverLastIntegrateMs = 0;
-uint32_t farDriverRideStartedAtMs = 0;
-bool farDriverAnnounced = false;
 
 const uint32_t VESC_REPLY_TIMEOUT_MS = 100;
 
@@ -960,87 +954,6 @@ uint8_t vescCruiseHoldProgress(uint32_t nowMs) {
   const uint8_t progress = cruiseHoldProgress(cruiseRuntime, settings, nowMs);
   portEXIT_CRITICAL(&cruiseMux);
   return progress;
-}
-
-void farDriverBackendBegin() {
-  farDriverTripKm = 0.0F;
-  farDriverLastIntegrateMs = 0;
-  farDriverRideStartedAtMs = 0;
-  farDriverAnnounced = false;
-  farDriverBleBegin();
-}
-
-void farDriverBackendStop() {
-  farDriverBleDisconnect();
-  farDriverLastIntegrateMs = 0;
-  farDriverAnnounced = false;
-}
-
-ControllerPollResult farDriverBackendPoll(ControllerSample &out) {
-  const FarDriverTelemetry telemetry = farDriverTelemetry();
-  const uint32_t now = millis();
-  const bool fresh = telemetry.updatedAtMs != 0 && now - telemetry.updatedAtMs <= VESC_STALE_AFTER_MS &&
-                     telemetry.haveElectrical && telemetry.haveMotion;
-  if (!fresh) {
-    if (farDriverAnnounced && telemetry.updatedAtMs != 0 && now - telemetry.updatedAtMs > VESC_STALE_AFTER_MS) {
-      farDriverAnnounced = false;
-      farDriverLastIntegrateMs = 0;
-      gardenLog("FarDriver telemetry lost");
-    }
-    return CONTROLLER_POLL_NO_SAMPLE;
-  }
-
-  if (!farDriverRideStartedAtMs) farDriverRideStartedAtMs = now;
-  out = {};
-  out.sampledAtMs = now;
-  const float trim = speedCalibration();
-  const float driveRatio = max(1, (int)vescDriveRatioHundredths) / 100.0F;
-  const float polePairs = max<uint8_t>(1, vescMotorPolePairs);
-  const float wheelRpm = fabsf((float)telemetry.rawRpm) * 4.0F / (polePairs * driveRatio);
-  out.values.speedKmh = max(0, (int)lroundf(wheelRpm * wheelCircumferenceMeters() * 0.06F * trim));
-  out.values.voltage = telemetry.voltage;
-  out.values.current = telemetry.current;
-  out.values.watts = (int)lroundf(telemetry.voltage * telemetry.current);
-  // Work in progress: no phase current. The FarDriver app shows one, so the
-  // frames very likely carry it, but the electrical frame this backend decodes
-  // holds a single current figure that we read as the pack side. Which side
-  // that figure really is has not been confirmed against a controller, and
-  // guessing would corrupt power and the logged energy totals as well. Until
-  // someone captures both readings side by side, motorCurrent stays unset and
-  // TELEMETRY_FIELD_MOTOR_CURRENT stays clear, so the dashboard metric reads
-  // "--" and replay marks the chart "Not recorded" rather than inventing a
-  // trace. VESC reports both separately and does fill this in.
-  out.values.motorTemp = telemetry.motorTemp;
-  out.values.escTemp = telemetry.controllerTemp;
-  out.values.batteryPercent = telemetry.socPercent >= 0
-                                  ? telemetry.socPercent
-                                  : batterySocFromVoltage(telemetry.voltage);
-  if (farDriverLastIntegrateMs != 0)
-    farDriverTripKm += out.values.speedKmh * ((now - farDriverLastIntegrateMs) / 3600000.0F);
-  farDriverLastIntegrateMs = now;
-  out.values.tripKm = farDriverTripKm;
-  out.values.uptimeSeconds = (now - farDriverRideStartedAtMs) / 1000UL;
-  out.values.avgSpeedKmh = out.values.uptimeSeconds > 0
-                               ? out.values.tripKm * 3600.0F / out.values.uptimeSeconds
-                               : 0.0F;
-  out.available = TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_POWER |
-                  TELEMETRY_FIELD_VOLTAGE | TELEMETRY_FIELD_CURRENT |
-                  TELEMETRY_FIELD_TRIP_DISTANCE | TELEMETRY_FIELD_AVG_SPEED |
-                  TELEMETRY_FIELD_UPTIME | TELEMETRY_FIELD_BATTERY_SOC |
-                  TELEMETRY_FIELD_RIDE_MODE;
-  out.derived = TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_POWER |
-                TELEMETRY_FIELD_TRIP_DISTANCE | TELEMETRY_FIELD_AVG_SPEED |
-                TELEMETRY_FIELD_UPTIME;
-  if (telemetry.haveMotorTemp) out.available |= TELEMETRY_FIELD_MOTOR_TEMP;
-  if (telemetry.haveControllerTemp) out.available |= TELEMETRY_FIELD_ESC_TEMP;
-  if (!telemetry.haveSoc) out.derived |= TELEMETRY_FIELD_BATTERY_SOC;
-  out.rideMode = telemetry.haveMotion ? telemetry.gear : 0;
-
-  if (!farDriverAnnounced) {
-    farDriverAnnounced = true;
-    gardenLog("FarDriver telemetry connected");
-  }
-  return CONTROLLER_POLL_UPDATED;
 }
 
 #endif  // CYD_LVGL_PREVIEW

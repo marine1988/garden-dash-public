@@ -1,9 +1,4 @@
-"""Build and flash one of the standalone fake-controller CYD firmwares.
-
-Both senders are flashed the same way and differ only in the PlatformIO
-environment and the name they advertise, so they share this module rather than
-drifting apart as two copies.
-"""
+"""Build and flash the standalone fake VESC CYD firmware."""
 import argparse
 import json
 from pathlib import Path
@@ -21,7 +16,6 @@ class Sender:
 
 
 SENDERS = {
-    "fardriver": Sender("fardriver_test", "FAKE FARDRIVER TEST FIRMWARE", "FarDriver TEST ..."),
     "vesc": Sender("vesc_test", "FAKE VESC TEST FIRMWARE", "VESC TEST ..."),
 }
 

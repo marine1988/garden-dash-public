@@ -1,39 +1,35 @@
-# Fake controller test senders
+# Fake VESC test sender
 
-Two minimal lab applications that impersonate a controller over Bluetooth, one
-per backend, so the dashboard's link handling can be exercised without a
-vehicle. Flash **one spare CYD** with a sender, then use another CYD running the
-ordinary dashboard as the receiver. These are separate TFT_eSPI applications,
-not LVGL dashboard themes.
+A minimal lab application that impersonates a VESC over Bluetooth, so the
+dashboard's link handling can be exercised without a vehicle. Flash **one spare
+CYD** with the sender, then use another CYD running the ordinary dashboard as
+the receiver. It is a separate TFT_eSPI application, not an LVGL dashboard theme.
 
-The important difference between them follows the real protocols: **FarDriver
-streams and a VESC never speaks first.** The FarDriver sender has a packet rate
-to set and streaming to start; the VESC sender answers requests, so its controls
-are about *what it answers* rather than how often it talks.
-
-Both exercise the protocol assumptions in the current firmware. Neither
-validates a real controller's behaviour. Capture replay, malformed frames and
-fragmentation are outside both.
+The sender answers requests; it never speaks first, matching a real VESC. Its
+controls are about *what it answers* rather than how often it talks. It
+exercises the protocol assumptions in the current firmware, not a real
+controller's behaviour. Capture replay, malformed frames and fragmentation are
+outside it.
 
 ## Flashing and restoring
 
-| | FarDriver | VESC |
-| --- | --- | --- |
-| Upload | `scripts\upload_fardriver_test.bat` | `scripts\upload_vesc_test.bat` |
-| Build only | `--build-only` | `--build-only`, or `pio run -e vesc_test` |
-| Environment | `fardriver_test` | `vesc_test` |
+| | |
+| --- | --- |
+| Upload | `scripts\upload_vesc_test.bat` |
+| Build only | `--build-only`, or `pio run -e vesc_test` |
+| Environment | `vesc_test` |
 
 With one USB serial device the script selects that port; with several it asks
 which is the spare CYD. To select explicitly, pass the port:
 `scripts\upload_vesc_test.bat COM4`. Use the board's USB data connector and a
-data cable. Neither script ever builds the default dashboard environment, and
-both leave the result visible until a keypress.
+data cable. The script never builds the default dashboard environment, and
+leaves the result visible until a keypress.
 
 Restore the normal dashboard with `scripts\upload_firmware_usb.bat COM4`. The
-senders use the same partition table, do not erase the whole flash, and write
-only their own inversion preference.
+sender uses the same partition table, does not erase the whole flash, and writes
+only its own inversion preference.
 
-## Controls common to both
+## Controls
 
 - **Mode** (bottom of screen): switch between **Ride Sequence** (default) and
   **Stationary**. Switching mode restarts the sequence. New connections reset
@@ -41,90 +37,21 @@ only their own inversion preference.
 - **Disconnect:** drop the current BLE client and resume advertising; reconnect
   from the receiver.
 - **Invert Colors:** toggle panel inversion and save it in the sender's own
-  settings namespace (`fd-test` / `vesc-test`). Initial detection matches the
-  dashboard's panel readback heuristic. This does not change the dashboard's
-  stored panel profile.
+  settings namespace (`vesc-test`). Initial detection matches the dashboard's
+  panel readback heuristic. This does not change the dashboard's stored panel
+  profile.
 - **BOOT:** short press/release toggles transmission; hold for 1.2 seconds and
   release to invert. Hold only after boot; holding during reset enters the
   bootloader.
 - **Serial at 115200 baud:** `d` disconnects, `i` toggles inversion, `m`
-  switches mode, `s` toggles transmission. FarDriver adds `r` to cycle the
-  packet rate; VESC adds `v` to toggle setup values and `c` to clear its shadow
-  profile and cruise state. Connection and subscription events are logged.
+  switches mode, `s` toggles transmission, `v` toggles setup values and `c`
+  clears the shadow profile and cruise state. Connection and subscription events
+  are logged.
 
 Touch uses the existing dashboard calibration, read-only, if available;
 otherwise the dashboard's factory mapping. BOOT and serial remain usable if
-touch needs calibration. Both screens are fixed English 320x240 diagnostic
-interfaces.
-
----
-
-# FarDriver sender
-
-Advertises `FarDriver TEST xxxx`, service `FFE0`, with a notify-only `FFEC`
-characteristic and one BLE client at a time.
-
-## Reproduce the discovery/Continue problem
-
-1. Power the sender and scan for FarDriver on the receiver. Select the
-   `FarDriver TEST xxxx` entry; do not select a real controller accidentally.
-   Choose **MODE: STATIONARY** for setup/Continue testing.
-2. Wait for **CONNECTED / SILENT** on the sender. BLE and notification
-   subscription are established, but it sends no packets.
-3. Try **Continue** on the receiver. Note whether confirmation opens.
-4. Return to discovery (or reconnect), tap **START PACKETS** on the sender,
-   then try **Continue** while packets arrive. The counter should increase.
-5. Tap **PAUSE PACKETS** and try again. Compare 1, 10 and 50 packets/second.
-   Repeat with an original and an inverted-panel receiver.
-
-Each connection and new subscription starts silent. Starting before subscription
-does not arm automatic transmission. A phone can connect instead of the receiver
-to save these synthetic packets using the Android capture option.
-
-## Its own controls
-
-- **Start/Pause packets:** switch between silence and continuous notifications.
-- **Rate:** cycle nominal 1, 10 and 50 notifications/second; default 10. Timing
-  is best effort — display redraws and Bluetooth scheduling add jitter.
-
-## What the packets mean
-
-One 16-byte frame per notification, rotating IDs `0x80`, `0x81`, `0xB3`, `0xB5`.
-The CRC uses the current receiver's reflected `0xA001` polynomial and `0x7F3C`
-seed, stored low byte first. Each field group updates once per four
-notifications. Sent counts successful notification submissions, not
-application-level acknowledgements from the receiver.
-
-**Stationary** represents 52.0 V, 0 A, 0 RPM, first gear, 30 C controller
-temperature, 35 C motor temperature, and 75% charge. Zero RPM is intentional.
-
-**Ride Sequence** repeats every 60 seconds, interpolating between these points:
-
-| Time | Phase | Raw RPM | Voltage | Current | Derived power | Motor / ESC | SOC |
-| --- | --- | ---: | ---: | ---: | ---: | --- | ---: |
-| 0–5 s | Idle | 0 | 52 V | 0 A | 0 W | 35 / 30 C | 75% |
-| 15 s | Accelerating | 300 | 50 V | 25 A | 1,250 W | 42 / 34 C | 74% |
-| 25 s | Peak | 600 | 49 V | 40 A | 1,960 W | 55 / 42 C | 72% |
-| 35 s | Cruise | 450 | 51 V | 18 A | 918 W | 60 / 45 C | 71% |
-| 40 s | Coast | 400 | 52 V | 0 A | 0 W | 57 / 42 C | 71% |
-| 50 s | Regen | 100 | 53 V | -10 A | -530 W | 48 / 37 C | 72% |
-| 55–60 s | Stopped | 0 | 52 V | 0 A | 0 W | 35 / 30 C | 75% |
-
-Gear also varies through 1, 2, and 3. The accelerated temperature/SOC changes
-are display-test fixtures, not a physical battery model. The receiver
-calculates power from voltage/current and speed from raw RPM and its
-wheel/pole/gearing settings. With 700 mm wheels, 7 pole pairs and 1:1 gearing,
-peak speed is about 45 km/h. Packet rate does not change the cycle duration.
-One sample is held across each four-frame group, so low rates show coarser
-steps. The sender shows cycle time, voltage, watts and raw RPM.
-
----
-
-# VESC sender
-
-Advertises `VESC TEST xxxx` with the Nordic UART Service `6e400001-...`, a write
-characteristic `...0002` and a notify characteristic `...0003`, one BLE client
-at a time.
+touch needs calibration. The screen is a fixed English 320x240 diagnostic
+interface.
 
 ## Testing a VESC Bluetooth link
 

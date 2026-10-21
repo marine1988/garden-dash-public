@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "config.h"
-#include "fardriver_ble.h"
 #include "vesc_ble.h"
 
 #ifndef CYD_LVGL_PREVIEW
@@ -20,18 +19,6 @@ ControllerLinkState mapVescState(VescBleState state) {
     case VESC_BLE_CONNECTED: return CONTROLLER_LINK_CONNECTED;
     case VESC_BLE_ERROR: return CONTROLLER_LINK_FAILED;
     case VESC_BLE_IDLE:
-    default: return CONTROLLER_LINK_IDLE;
-  }
-}
-
-ControllerLinkState mapFarDriverState(FarDriverBleState state) {
-  switch (state) {
-    case FARDRIVER_BLE_SCANNING: return CONTROLLER_LINK_SCANNING;
-    case FARDRIVER_BLE_CONNECTING: return CONTROLLER_LINK_CONNECTING;
-    case FARDRIVER_BLE_DISCOVERING: return CONTROLLER_LINK_DISCOVERING;
-    case FARDRIVER_BLE_CONNECTED: return CONTROLLER_LINK_CONNECTED;
-    case FARDRIVER_BLE_ERROR: return CONTROLLER_LINK_FAILED;
-    case FARDRIVER_BLE_IDLE:
     default: return CONTROLLER_LINK_IDLE;
   }
 }
@@ -72,43 +59,10 @@ ControllerLinkStatus vescBleLinkStatus() {
   return target;
 }
 
-ControllerLinkStatus farDriverLinkStatus() {
-  const FarDriverBleStatus source = farDriverBleStatus();
-  ControllerLinkStatus target = {};
-  target.state = mapFarDriverState(source.state);
-  target.error = source.state == FARDRIVER_BLE_ERROR ? linkErrorFromMessage(source.message) : CONTROLLER_LINK_ERR_NONE;
-  target.deviceCount = min<uint8_t>(source.deviceCount, CONTROLLER_LINK_MAX_DEVICES);
-  for (uint8_t i = 0; i < target.deviceCount; i++)
-    copyDevice(target.devices[i], source.devices[i].name, source.devices[i].address,
-               source.devices[i].rssi, source.devices[i].addressType, source.devices[i].likelyFarDriver);
-  target.savedDevice = source.savedDevice;
-  snprintf(target.savedAddress, sizeof(target.savedAddress), "%s", source.savedAddress);
-  snprintf(target.connectedAddress, sizeof(target.connectedAddress), "%s", source.connectedAddress);
-  target.revision = source.linkRevision;
-  return target;
-}
-
 ControllerLinkStatus uartLinkStatus() {
   ControllerLinkStatus status = {};
   status.state = telemetryLinkState() == LINK_LIVE ? CONTROLLER_LINK_CONNECTED : CONTROLLER_LINK_IDLE;
   return status;
-}
-
-bool noDiagnostics(ControllerLinkDiagnostics &) { return false; }
-
-bool farDriverDiagnostics(ControllerLinkDiagnostics &out) {
-  const FarDriverBleStatus source = farDriverBleStatus();
-  out = {};
-  snprintf(out.serviceUuid, sizeof(out.serviceUuid), "%s", source.serviceUuid);
-  snprintf(out.characteristicUuid, sizeof(out.characteristicUuid), "%s", source.characteristicUuid);
-  snprintf(out.lastPacketHex, sizeof(out.lastPacketHex), "%s", source.lastPacketHex);
-  out.frameCount = source.frameCount;
-  out.crcFailCount = source.crcFailCount;
-  out.discardedBytes = source.discardedBytes;
-  out.lastPacketLength = source.lastPacketLength;
-  out.lastFrameId = source.lastFrameId;
-  out.connectedRssi = source.connectedRssi;
-  return true;
 }
 
 void noBegin() {}
@@ -120,15 +74,10 @@ void noDisconnect() {}
 bool quiesceImmediately() { return true; }
 
 void resetVescBle() { vescBleStream.resetSettings(); }
-void resetFarDriverBle() { farDriverBleResetSettings(); }
 void startVescScan() { vescBleStream.startScan(); }
 void connectVesc(uint8_t index) { vescBleStream.connectDevice(index); }
 void disconnectVesc() { vescBleStream.disconnectDevice(); }
-void startFarDriverScan() { farDriverBleStartScan(); }
-void connectFarDriver(uint8_t index) { farDriverBleConnect(index); }
-void disconnectFarDriver() { farDriverBleDisconnect(); }
 void reconnectVesc() { vescBleStream.reconnectSaved(); }
-void reconnectFarDriver() { farDriverBleReconnectSaved(); }
 
 // Quiescing means the backend has stopped using the Bluetooth radio, which is
 // not the same as being disconnected: the client object keeps the single
@@ -145,34 +94,17 @@ bool quiesceVescBle() {
   return false;
 }
 
-bool quiesceFarDriverBle() {
-  const FarDriverBleState state = farDriverBleStatus().state;
-  const bool busy = state == FARDRIVER_BLE_CONNECTED || state == FARDRIVER_BLE_CONNECTING ||
-                    state == FARDRIVER_BLE_DISCOVERING || state == FARDRIVER_BLE_SCANNING;
-  if (!busy && farDriverBleRadioReleased()) return true;
-  // One request covers all of it: the worker stops the scan, disconnects and
-  // frees the client, and leaves the backend idle.
-  farDriverBleReleaseRadio();
-  return false;
-}
-
 #ifdef CYD_LVGL_PREVIEW
 ControllerPollResult noPoll(ControllerSample &) { return CONTROLLER_POLL_NO_SAMPLE; }
 #define VESC_UART_BEGIN noBegin
 #define VESC_BLE_BEGIN noBegin
 #define VESC_BACKEND_STOP noStop
 #define VESC_BACKEND_POLL noPoll
-#define FARDRIVER_BEGIN noBegin
-#define FARDRIVER_STOP noStop
-#define FARDRIVER_POLL noPoll
 #else
 #define VESC_UART_BEGIN vescUartBackendBegin
 #define VESC_BLE_BEGIN vescBleBackendBegin
 #define VESC_BACKEND_STOP vescBackendStop
 #define VESC_BACKEND_POLL vescBackendPoll
-#define FARDRIVER_BEGIN farDriverBackendBegin
-#define FARDRIVER_STOP farDriverBackendStop
-#define FARDRIVER_POLL farDriverBackendPoll
 #endif
 
 // The two VESC entries get 6 KiB of telemetry-task stack. A profile write
@@ -182,30 +114,21 @@ ControllerPollResult noPoll(ControllerSample &) { return CONTROLLER_POLL_NO_SAMP
 // there rebooted the display on every reconnect.
 const ControllerBackend kBackends[] = {
     {CONTROLLER_ID_VESC_UART, "VESC", CONTROLLER_TRANSPORT_UART,
-     {false, true, true, false, true, false, false, true, true},
+     {false, true, true, false, true, true},
      VESC_UART_BEGIN, VESC_BACKEND_STOP, noReset, quiesceImmediately,
-     noScan, noConnect, noDisconnect, nullptr, uartLinkStatus, noDiagnostics,
+     noScan, noConnect, noDisconnect, nullptr, uartLinkStatus,
      VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 6144},
     {CONTROLLER_ID_VESC_BLE, "VESC", CONTROLLER_TRANSPORT_BLE,
-     {true, false, true, false, true, false, false, true, true},
+     {true, false, true, false, true, true},
      VESC_BLE_BEGIN, VESC_BACKEND_STOP, resetVescBle, quiesceVescBle,
-     startVescScan, connectVesc, disconnectVesc, reconnectVesc, vescBleLinkStatus, noDiagnostics,
+     startVescScan, connectVesc, disconnectVesc, reconnectVesc, vescBleLinkStatus,
      VESC_BACKEND_POLL, VESC_CONNECTED_POLL_MS, 6144},
-    {CONTROLLER_ID_FARDRIVER_BLE, "FarDriver", CONTROLLER_TRANSPORT_BLE,
-     {true, false, false, true, false, false, true, false, false},
-     FARDRIVER_BEGIN, FARDRIVER_STOP, resetFarDriverBle, quiesceFarDriverBle,
-     startFarDriverScan, connectFarDriver, disconnectFarDriver, reconnectFarDriver, farDriverLinkStatus,
-     farDriverDiagnostics,
-     FARDRIVER_POLL, 100, 4096},
 };
 
 #undef VESC_UART_BEGIN
 #undef VESC_BLE_BEGIN
 #undef VESC_BACKEND_STOP
 #undef VESC_BACKEND_POLL
-#undef FARDRIVER_BEGIN
-#undef FARDRIVER_STOP
-#undef FARDRIVER_POLL
 
 #ifndef CYD_LVGL_PREVIEW
 portMUX_TYPE snapshotMux = portMUX_INITIALIZER_UNLOCKED;
@@ -447,27 +370,12 @@ void controllerTelemetryTask(void *) {
 
 }  // namespace
 
-ControllerBackendId controllerBackendIdFor(ControllerType type, ControllerConnection connection) {
-  if (type == CONTROLLER_FARDRIVER) return CONTROLLER_ID_FARDRIVER_BLE;
+ControllerBackendId controllerBackendIdFor(ControllerConnection connection) {
   return connection == CONTROLLER_CONNECTION_BLE ? CONTROLLER_ID_VESC_BLE : CONTROLLER_ID_VESC_UART;
 }
 
-void controllerSelectionForId(ControllerBackendId id, ControllerType &type, ControllerConnection &connection) {
-  switch (id) {
-    case CONTROLLER_ID_VESC_BLE:
-      type = CONTROLLER_VESC;
-      connection = CONTROLLER_CONNECTION_BLE;
-      break;
-    case CONTROLLER_ID_FARDRIVER_BLE:
-      type = CONTROLLER_FARDRIVER;
-      connection = CONTROLLER_CONNECTION_BLE;
-      break;
-    case CONTROLLER_ID_VESC_UART:
-    default:
-      type = CONTROLLER_VESC;
-      connection = CONTROLLER_CONNECTION_UART;
-      break;
-  }
+ControllerConnection controllerConnectionForId(ControllerBackendId id) {
+  return id == CONTROLLER_ID_VESC_BLE ? CONTROLLER_CONNECTION_BLE : CONTROLLER_CONNECTION_UART;
 }
 
 uint8_t controllerBackendCount() { return sizeof(kBackends) / sizeof(kBackends[0]); }
@@ -479,14 +387,13 @@ const ControllerBackend *controllerBackendById(ControllerBackendId id) {
 }
 
 const ControllerBackend *activeControllerBackend() {
-  const ControllerBackend *backend = controllerBackendById(controllerBackendIdFor(controllerType, controllerConnection));
+  const ControllerBackend *backend = controllerBackendById(controllerBackendIdFor(controllerConnection));
   return backend ? backend : &kBackends[0];
 }
 
 const ControllerCapabilities &controllerCapabilities() { return activeControllerBackend()->caps; }
 const char *controllerTypeName() { return activeControllerBackend()->name; }
 bool controllerUsesVescBle() { return activeControllerBackend()->id == CONTROLLER_ID_VESC_BLE; }
-bool controllerUsesFarDriverBle() { return activeControllerBackend()->id == CONTROLLER_ID_FARDRIVER_BLE; }
 bool controllerUsesBluetooth() { return activeControllerBackend()->transport == CONTROLLER_TRANSPORT_BLE; }
 
 void controllerResetAllSettings() {
@@ -516,12 +423,11 @@ void controllerManagerBegin() {
   }
 }
 
-bool controllerManagerSwitchTo(ControllerType type, ControllerConnection connection) {
-  const ControllerBackendId wanted = controllerBackendIdFor(type, connection);
+bool controllerManagerSwitchTo(ControllerConnection connection) {
+  const ControllerBackendId wanted = controllerBackendIdFor(connection);
   const ControllerBackendId current = activeControllerBackend()->id;
   if (wanted == current) return false;
   if (!managerStarted) {
-    controllerType = type;
     controllerConnection = connection;
     return false;
   }
@@ -532,7 +438,6 @@ bool controllerManagerSwitchTo(ControllerType type, ControllerConnection connect
   // old backend itself and resumes on the new one.
   handoverState = HANDOVER_NONE;
   switchPreviousId = current;
-  controllerType = type;
   controllerConnection = connection;
   switchRequested = true;
   return true;
@@ -671,9 +576,13 @@ void previewSetControllerTelemetryFields(TelemetryFieldMask available, Telemetry
   previewDerivedFields = derived & available;
 }
 
+bool telemetrySpeedFromController() {
+  return telemetryLinkState() == LINK_LIVE && telemetryHas(previewAvailableFields, TELEMETRY_FIELD_SPEED) &&
+         !telemetryHas(previewDerivedFields, TELEMETRY_FIELD_SPEED);
+}
+
 void controllerManagerBegin() {}
-bool controllerManagerSwitchTo(ControllerType type, ControllerConnection connection) {
-  controllerType = type;
+bool controllerManagerSwitchTo(ControllerConnection connection) {
   controllerConnection = connection;
   return false;
 }

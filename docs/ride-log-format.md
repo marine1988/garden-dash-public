@@ -51,10 +51,9 @@ assignments live in `src/lvgl_app/controller_manager.h`; changing them requires
 a new log-format version.
 
 Phase current is the motor side, several times the pack figure away from full
-duty, and is signed through regeneration. Only backends that report it
-separately set its bit: VESC does, FarDriver does not yet (see
-`farDriverBackendPoll`), and a ride recorded without it charts as "Not
-recorded" rather than as zero.
+duty, and is signed through regeneration. Only a controller that reports it
+separately sets its bit; a ride recorded without it charts as "Not recorded"
+rather than as zero.
 
 The flags byte at offset 11 was reserved and written as zero, so a file from
 before it existed reads as an ordinary ride and needs no format bump. The ride

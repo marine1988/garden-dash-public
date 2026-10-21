@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Standalone lab firmware: TFT_eSPI only, no dashboard/LVGL application state.
-// The FarDriver sender streams unprompted; a VESC answers requests, so this one
-// is a responder and its controls are about what it answers, not how often.
+// A VESC answers requests, so this sender is a responder and its controls are
+// about what it answers, not how often.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>

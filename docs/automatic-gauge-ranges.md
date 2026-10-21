@@ -26,8 +26,8 @@ age it), and the ceiling is the largest of those, never below its default. When
 the old peak ages out the ceiling falls back, but only if the new scale is at
 least 15% smaller and the reading is below 60% of it, so a needle never moves
 because the scale shrank. **Reset Learned Ranges** starts learning again. The
-speed ceiling persists independently for VESC UART, VESC BLE and FarDriver BLE
-(automatic saves occur after a ten-second stop, no more than once per minute);
+speed ceiling persists independently for VESC UART and VESC BLE (automatic
+saves occur after a ten-second stop, no more than once per minute);
 it is restored at boot as the last ride's peak and ages out like any other.
 Other ranges start fresh at boot. State is per backend, not per controller
 address: reset learning when changing vehicles on the same backend. Dashboard

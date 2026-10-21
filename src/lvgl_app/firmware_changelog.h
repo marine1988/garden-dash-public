@@ -17,6 +17,11 @@ struct FirmwareChangelogEntry {
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
         "2026-10-22",
+        "VESC-only controller link",
+        "FarDriver support, its BLE stack and test sender are gone; only VESC remains.",
+    },
+    {
+        "2026-10-22",
         "Cruise by steady speed",
         "Cruise engages after a steady-speed hold; no button and no VESC package.",
     },
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-14",
         "VESC link on one connector",
         "A garden_usb build puts the VESC link on the power header's TX/RX: one cable, no log.",
-    },
-    {
-        "2026-10-13",
-        "Cruise holds on the scooter",
-        "Cruise now drives the controller's own hold over LispBM; braking releases it.",
     },
 };
 

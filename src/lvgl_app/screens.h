@@ -83,8 +83,8 @@ void uiPreviewShowLightSensorCalibrationPrompt(bool brightStep);
 void uiPreviewShowLightSensorNotice(bool failed);
 void uiPreviewShowSetupCompleteNotice();
 void uiPreviewExpireLinkAlertDelay();
-void uiPreviewSetControllerSetup(uint8_t stage, ControllerType type = CONTROLLER_VESC,
+void uiPreviewSetControllerSetup(uint8_t stage,
                                  ControllerConnection connection = CONTROLLER_CONNECTION_UART);
-void uiPreviewSetControllerBackend(ControllerType type, ControllerConnection connection);
+void uiPreviewSetControllerBackend(ControllerConnection connection);
 void uiPreviewSetFirmwareUpdateUserMode(bool enabled);
 #endif

@@ -20,6 +20,10 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
+## 2026-10-22 — VESC-only controller link
+
+FarDriver support, its BLE stack and test sender are gone; only VESC remains.
+
 ## 2026-10-22 — Cruise by steady speed
 
 Cruise engages after a steady-speed hold; no button and no VESC package.

@@ -35,8 +35,7 @@ and can still be run directly; this page names them that way.
 | 5 | Package firmware: test package or release | `scripts\make_release.bat [--test \| --release]` |
 | 6 | Install package, over a USB cable or Bluetooth | `garden.bat --usb [release.json] [--port COMx] [--erase-all]`, `garden.bat --ble [release.json] [uploader options]` |
 | 7 | Fake VESC | `scripts\upload_vesc_test.bat` |
-| 8 | Fake FarDriver | `scripts\upload_fardriver_test.bat` |
-| 9 | Install the companion app (private checkout only) | `android-companion\garden-app.bat` |
+| 8 | Install the companion app (private checkout only) | `android-companion\garden-app.bat` |
 
 On other platforms, use the `pio` commands directly.
 
@@ -47,8 +46,8 @@ pio run
 ```
 
 `garden` is the default environment, so a bare `pio run` builds the dashboard
-firmware. `fardriver_test` and `vesc_test` build the two fake controller
-senders instead; see [test-senders.md](test-senders.md).
+firmware. `vesc_test` builds the fake VESC sender instead; see
+[test-senders.md](test-senders.md).
 
 To build and flash over USB:
 
@@ -312,7 +311,7 @@ another signing key.
 | --- | --- |
 | `src/main_lvgl.cpp` | Entry point |
 | `src/lvgl_app/` | All UI, controller and update code |
-| `src/vesc_test/`, `src/fardriver_test/` | Fake controller senders |
+| `src/vesc_test/` | Fake VESC sender |
 | `include/config.h` | Pin and default configuration |
 | `include/lv_conf.h` | LVGL configuration |
 | `tools/` | Preview renderer, simulator, layout editor, asset and font pipelines |

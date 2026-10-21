@@ -147,11 +147,6 @@ if(CYD_BUILD_TESTS OR CYD_BUILD_SIMULATOR)
   add_executable(cyd_ride_log_policy_test ride_log_policy_test.cpp)
   target_include_directories(cyd_ride_log_policy_test PRIVATE "${PROJECT_ROOT}/src/lvgl_app")
   add_test(NAME cyd_ride_log_policy COMMAND cyd_ride_log_policy_test)
-  # Like the VESC sender below, checked against the firmware's own stream and
-  # decoder rather than against a second copy of the frame layout.
-  add_executable(cyd_fardriver_sender_test fardriver_sender_test.cpp
-                 "${PROJECT_ROOT}/src/lvgl_app/fardriver_protocol.cpp")
-  add_test(NAME cyd_fardriver_sender COMMAND cyd_fardriver_sender_test)
   # The VESC sender is checked against the firmware's own parsers, so it links
   # the real protocol module rather than restating the layout a second time.
   add_executable(cyd_vesc_sender_test vesc_sender_test.cpp

@@ -43,7 +43,7 @@ Issues, discussion and reverse-engineering findings need no agreement at all.
   configuration:
 
   ```powershell
-  pio run -e garden -e fardriver_test -e vesc_test
+  pio run -e garden -e vesc_test
   ```
 
 - For anything touching the display, controller link or update path, run the

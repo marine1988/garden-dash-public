@@ -16,6 +16,7 @@
 
 #include "Preferences.h"
 #include "app_state.h"
+#include "controller_manager.h"
 #include "vehicle_fields.h"
 
 // preview_stubs.cpp: decides whether the controller is reporting its own speed,
@@ -106,6 +107,7 @@ void testNumericClamps() {
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "700", wheelDiameterMm, 700, "wheel diameter mid-range");
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "2000", wheelDiameterMm, 1000, "wheel diameter above maximum");
 
+  previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL & ~TELEMETRY_FIELD_SPEED);
   previewSetTelemetryLink(LINK_LIVE);
   expect(telemetrySpeedFromController(), "a live link means the slot is a speed calibration");
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "10", speedCalibrationPercent, 50, "speed calibration below minimum");
@@ -113,6 +115,7 @@ void testNumericClamps() {
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "400", speedCalibrationPercent, 200, "speed calibration above maximum");
   expect(wheelDiameterMm == 1000, "editing the calibration leaves the wheel diameter alone");
   previewSetTelemetryLink(LINK_LOST);
+  previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL);
 
   expectSaved(VEHICLE_FIELD_VESC_BAUD, "1200", vescUartBaud, 9600, "UART baud below minimum");
   expectSaved(VEHICLE_FIELD_VESC_BAUD, "115200", vescUartBaud, 115200, "UART baud mid-range");
@@ -273,11 +276,13 @@ void testFormatting() {
   expectValue(VEHICLE_FIELD_WHEEL_MM, "480 mm", "wheel diameter tile");
 
   // The same slot renders as a multiplier once the controller reports speed.
+  previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL & ~TELEMETRY_FIELD_SPEED);
   previewSetTelemetryLink(LINK_LIVE);
   speedCalibrationPercent = 103;
   expectValue(VEHICLE_FIELD_WHEEL_MM, "1.03x", "speed calibration tile");
   expectEditText(VEHICLE_FIELD_WHEEL_MM, "103", "speed calibration is typed as a percent");
   previewSetTelemetryLink(LINK_LOST);
+  previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL);
 
   topSpeedKmh = 250;
   speedMode1Kmh = 52;

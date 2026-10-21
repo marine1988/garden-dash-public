@@ -157,6 +157,6 @@ GARDEN Companion implements the same signed OTA protocol for phone uploads.
   digest.
 - Disconnect and power loss during erase, write, validation, and before reboot.
 - New image crash/reset before health confirmation and successful rollback.
-- Successful update while the configured controller normally uses UART, VESC
-  BLE, and FarDriver BLE.
+- Successful update while the configured controller normally uses wired UART
+  or VESC BLE.
 - Repeated update attempts while monitoring minimum free heap and watchdogs.

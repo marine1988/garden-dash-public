@@ -38,7 +38,7 @@ These are binding. Code comments and `AGENTS.md` reference them by path.
 | [simulator.md](simulator.md) | Running the UI on Windows: interactive simulator, state captures, the ctest suite, what the host fakes do and do not cover, and how to debug a native crash. |
 | [demo-video.md](demo-video.md) | Rendering the demo video from the simulator: the scene scripts, how frames are timed, how to add a chapter, and the published copies in `docs/media/`. |
 | [device-smoke-test.md](device-smoke-test.md) | The physical-hardware matrix to run before tagging a firmware checkpoint. The only source of authoritative performance and hardware claims. |
-| [test-senders.md](test-senders.md) | The fake VESC and FarDriver senders: flashing a spare CYD that impersonates a controller over Bluetooth. |
+| [test-senders.md](test-senders.md) | The fake VESC sender: flashing a spare CYD that impersonates a controller over Bluetooth. |
 
 ## History — context, not current state
 

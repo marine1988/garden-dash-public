@@ -17,7 +17,6 @@ jobs:
       matrix:
         environment:
           - garden
-          - fardriver_test
           - vesc_test
     steps:
       - uses: actions/checkout@v4

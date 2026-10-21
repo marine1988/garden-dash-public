@@ -111,10 +111,10 @@ int main() {
   check(needle.advance(-100,2000,true)==0,"regen transition showed old drive power");
   using namespace cyd::preview;
   initRuntime(); previewPreferencesConfigure(nullptr,true); loadAppSettings();
-  automaticGaugeRanges=true; controllerType=CONTROLLER_VESC; controllerConnection=CONTROLLER_CONNECTION_UART;
+  automaticGaugeRanges=true; controllerConnection=CONTROLLER_CONNECTION_UART;
   learnedGaugeSpeed[0]=80; saveAppSettings(); learnedGaugeSpeed[0]=30; loadAppSettings();
   check(speedScaleMaxKmh()==80,"learned speed not restored");
-  controllerType=CONTROLLER_FARDRIVER; check(speedScaleMaxKmh()==30,"backend ranges leaked");
+  controllerConnection=CONTROLLER_CONNECTION_BLE; check(speedScaleMaxKmh()==30,"backend ranges leaked");
   setDemoPreview(true);
   for (int mode=0; mode<MODE_COUNT; ++mode) {
     resetAutomaticGaugeRanges();

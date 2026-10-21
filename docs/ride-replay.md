@@ -76,8 +76,8 @@ starts at zero. Power and both current axes include zero and extend below it
 when negative readings occur; the bubble keeps the signed value (power adds
 `(regen)`). Phase current is the
 motor side: it runs several times the pack figure away from full duty, so it
-peaks under load at low speed rather than at peak power. Only VESC reports it;
-a FarDriver ride charts it as "Not recorded". Voltage, battery and
+peaks under load at low speed rather than at peak power. A ride recorded without
+phase current charts it as "Not recorded". Voltage, battery and
 temperatures fit the ride's range. Each field has its own fixed scale for the
 loaded ride. `--` indicates unavailable data; `gaps` beside the time
 indicates skipped CRC-invalid records.

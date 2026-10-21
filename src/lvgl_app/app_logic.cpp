@@ -67,7 +67,6 @@ bool themeLedEnabled = true;
 bool bluetoothEnabled = true;
 DisplayPanelProfile displayPanelProfile = DISPLAY_PANEL_STANDARD;
 uint8_t displayPanelTuning = PANEL_TUNING_BASELINE;
-ControllerType controllerType = CONTROLLER_VESC;
 ControllerConnection controllerConnection = CONTROLLER_CONNECTION_UART;
 bool developerOptionsEnabled = false;
 bool dashboardDemoModeEnabled = false;
@@ -79,10 +78,10 @@ DashboardCustomization dashboardCustomizations[MODE_COUNT] = {};
 DashboardAppearanceMode dashboardAppearanceMode = DASH_APPEARANCE_DARK;
 
 // Cruise control, applied by the VESC backend from the telemetry task. The
-// defaults are deliberately conservative: off, a five-second hold to engage, a
-// 5-25 km/h window and only the two gentler ride modes, so nothing engages by
-// accident on first boot. Bit (1 << (mode-1)) in the mask; 0 would allow every
-// mode, which is not what a fresh display should choose.
+// defaults are deliberately conservative: off, a five-second steady-speed hold,
+// and a 5-25 km/h window, so nothing engages by accident on first boot. The
+// mode mask is kept only for stored-settings compatibility: standard VESC
+// telemetry reports no ride mode, and the automatic path does not gate on it.
 bool cruiseControlEnabled = false;
 uint16_t cruiseHoldTimeDeciS = 50;
 uint16_t cruiseMinSpeedKmh = 5;
@@ -1555,7 +1554,7 @@ static AppSettingsSnapshot currentAppSettingsSnapshot() {
   snapshot.demoSpeed = demoTimeScale;
   snapshot.autoReturnEnabled = autoReturnEnabled;
   snapshot.autoReturnTimeoutSeconds = autoReturnTimeoutSeconds;
-  snapshot.controllerBackendId = static_cast<uint8_t>(controllerBackendIdFor(controllerType, controllerConnection));
+  snapshot.controllerBackendId = static_cast<uint8_t>(controllerBackendIdFor(controllerConnection));
   snapshot.controllerEverConnected = controllerEverConnected;
   snapshot.cruiseEnabled = cruiseControlEnabled;
   snapshot.cruiseHoldTimeDeciS = cruiseHoldTimeDeciS;
@@ -1779,7 +1778,6 @@ static void setDefaultAppSettings() {
   restartDemoRide();
   autoReturnEnabled = true;
   autoReturnTimeoutSeconds = 30;
-  controllerType = CONTROLLER_VESC;
   controllerConnection = CONTROLLER_CONNECTION_UART;
   configStep = 0;
   pinInput[0] = '\0';
@@ -1928,10 +1926,13 @@ void loadAppSettings() {
   if (demoTimeScale != 1 && demoTimeScale != 5 && demoTimeScale != 15 && demoTimeScale != 30 && demoTimeScale != 60) demoTimeScale = 1;
   autoReturnEnabled = preferences.getBool("autoReturn", true);
   autoReturnTimeoutSeconds = constrain(preferences.getUShort("autoRetSec", 30), 30, 3600);
-  ControllerBackendId backendId = static_cast<ControllerBackendId>(
-      preferences.getUChar("ctrlBackend", static_cast<uint8_t>(CONTROLLER_ID_VESC_UART)));
-  if (!controllerBackendById(backendId)) backendId = CONTROLLER_ID_VESC_UART;
-  controllerSelectionForId(backendId, controllerType, controllerConnection);
+  uint8_t storedBackendId = preferences.getUChar("ctrlBackend", static_cast<uint8_t>(CONTROLLER_ID_VESC_UART));
+  // 3 was the retired FarDriver BLE selection. Keep those riders on Bluetooth,
+  // now as a VESC BLE link, rather than silently dropping them to UART.
+  if (storedBackendId == 3) storedBackendId = static_cast<uint8_t>(CONTROLLER_ID_VESC_BLE);
+  if (storedBackendId != CONTROLLER_ID_VESC_UART && storedBackendId != CONTROLLER_ID_VESC_BLE)
+    storedBackendId = CONTROLLER_ID_VESC_UART;
+  controllerConnection = controllerConnectionForId(static_cast<ControllerBackendId>(storedBackendId));
   displayBrightnessPercent = constrain(displayBrightnessPercent, DISPLAY_BRIGHTNESS_MIN, DISPLAY_BRIGHTNESS_MAX);
   cruiseControlEnabled = preferences.getBool("cruiseOn", false);
   cruiseHoldTimeDeciS = constrain(preferences.getUShort("cruiseHold", cruiseHoldTimeDeciS), 1, 100);
@@ -2530,7 +2531,7 @@ void clearGaugeRangeRuntime() {
   for (auto *source : gaugeRanges)
     if (source) for (int i = 0; i < RANGE_COUNT; ++i) source[i] = GaugeRangeTracker{};
 }
-static int gaugeBackendIndex() { return controllerType == CONTROLLER_FARDRIVER ? 2 : controllerConnection == CONTROLLER_CONNECTION_BLE ? 1 : 0; }
+static int gaugeBackendIndex() { return controllerConnection == CONTROLLER_CONNECTION_BLE ? 1 : 0; }
 static int gaugeSource() { return demoPreviewActive ? 4 : dashboardDemoModeEnabled ? 3 : gaugeBackendIndex(); }
 int automaticGaugeSource() { return gaugeSource(); }
 static const int kGaugeRangeDefaults[RANGE_COUNT] = {30, 500, 25, 50, 500, 25};

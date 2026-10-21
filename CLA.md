@@ -7,8 +7,8 @@ project-owned, hand-written Garden-Dash firmware source in `src/main_lvgl.cpp`,
 `src/lvgl_app/`, and `include/` (a **Covered Contribution**).
 
 Generated files, third-party material, fonts, documentation, tools, tests,
-previews, and assets are not covered. Neither are the test-sender firmwares in
-`src/fardriver_test/` and `src/vesc_test/`.
+previews, and assets are not covered. Neither is the test-sender firmware in
+`src/vesc_test/`.
 
 ## Public licence
 

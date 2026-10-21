@@ -13,7 +13,7 @@ changing the firmware. The contracts it points to are binding; this page is not.
 | Framework | Arduino core for ESP32, on ESP-IDF and **FreeRTOS** | 2.0.17 | `setup()` / `loop()`, tasks, queues, mutexes |
 | UI | **LVGL** | 8.4.0 | `src/lvgl_app/`, configured by `include/lv_conf.h` |
 | Display driver | TFT_eSPI, with DMA | 2.5.43 | `src/main_lvgl.cpp` (flush callback), boot splash |
-| Bluetooth LE | NimBLE-Arduino | 2.5.1 | VESC and FarDriver clients, companion and update servers |
+| Bluetooth LE | NimBLE-Arduino | 2.5.1 | VESC client, companion and update servers |
 | Storage | NVS (`Preferences`), microSD (`SD`), two OTA slots | — | Settings, ride logs, firmware updates |
 | Language | C++ (Arduino flavour), `-O2` | — | Fonts are generated C files |
 
@@ -33,11 +33,11 @@ ships on the device.
 | `src/lvgl_app/ui_common.cpp`, `ui_style.h` | Shared components and design tokens ([ui-components.md](ui-components.md)) |
 | `src/lvgl_app/app_logic.cpp`, `app_state.h` | Settings, persistence, battery model, language, units |
 | `src/lvgl_app/controller_manager.*`, `controller_backends.*` | The controller boundary: one task, interchangeable backends |
-| `src/lvgl_app/vesc_*`, `fardriver_*` | Protocol code and Bluetooth workers for each controller |
+| `src/lvgl_app/vesc_*` | VESC protocol code and Bluetooth worker |
 | `src/lvgl_app/ride_logger.cpp`, `ride_replay*.{cpp,h,inc}` | microSD logging and on-device replay |
 | `src/lvgl_app/companion_ble.*` | Bluetooth Link server for the phone app |
 | `src/lvgl_app/firmware_update*.{cpp,h}` | Signed over-the-air update |
-| `src/vesc_test/`, `src/fardriver_test/` | Separate firmwares that impersonate a controller |
+| `src/vesc_test/` | Separate firmware that impersonates a VESC |
 
 `src/lvgl_app/` is also compiled for the host, with the hardware boundary
 replaced (`CYD_LVGL_PREVIEW`). There is no second implementation of any screen.
@@ -54,7 +54,6 @@ the card, or the radio lives in a separate task.
 | Arduino `loop` task | 1 (Arduino default) | 1 (Arduino default) | Arduino default | the core | LVGL, touch, display flush, UI logic, companion and update service calls |
 | `controller` | 0 | 1 | per backend (4096 for VESC UART) | `controller_manager.cpp` | Polls the active backend, applies the battery model, publishes the snapshot, feeds the ride logger |
 | `vesc-ble` | 0 | 1 | 4096 | `vesc_ble.cpp` | VESC Bluetooth client: scan, connect, request/response |
-| `fardriver-ble` | 0 | 0 | 4096 | `fardriver_ble.cpp` | FarDriver Bluetooth client |
 | `ride-logger` | 0 | 0 | 4096 | `ride_logger.cpp` | Owns the SD card: writes records, lists and exports rides |
 | `firmware-update` | 0 | 1 | 6144 | `firmware_update_ble.cpp` | Verifies and writes an incoming image (update mode only) |
 | `ride-replay` | any (unpinned) | 1 | 6144 | `ride_replay.cpp` | Reads a ride from SD for the replay screen; exists only while a replay is open |
@@ -65,9 +64,9 @@ Notes that are easy to get wrong:
 - **Controller backends are not tasks.** `controller_manager` owns the single
   telemetry task and calls the active backend's `poll`. Adding a backend adds no
   task. See [controller-backend-interface.md](controller-backend-interface.md).
-- **Priority 0 tasks run at the idle priority.** The ride logger and FarDriver
-  worker call `vTaskDelay(1)` inside long loops so the idle task on core 0 can
-  run and the task watchdog stays fed.
+- **Priority 0 tasks run at the idle priority.** The ride logger calls
+  `vTaskDelay(1)` inside long loops so the idle task on core 0 can run and the
+  task watchdog stays fed.
 - **UART is polled, Bluetooth is event-driven.** The VESC UART link uses
   `HardwareSerial(2)` from the manager task. The Bluetooth backends use their
   own worker plus the manager task.
@@ -79,7 +78,7 @@ Notes that are easy to get wrong:
 
 ```mermaid
 flowchart LR
-    C[Controller<br/>VESC / FarDriver] -->|UART or BLE| B[Backend<br/>controller_backends]
+    C[VESC controller] -->|UART or BLE| B[Backend<br/>controller_backends]
     B -->|ControllerSample| M[controller task<br/>manager]
     M -->|battery model<br/>staleness, link state| S[(ControllerSnapshot<br/>portMUX)]
     M -->|record, 64-deep queue| W[ride-logger task]
@@ -156,7 +155,7 @@ hangs on boot rolls back.
 | --- | --- |
 | `garden` | The dashboard firmware (default) |
 | `garden_test_package` | The same firmware, labelled `-test` on screen, built by the release tool |
-| `fardriver_test`, `vesc_test` | Fake controllers for a spare CYD ([test-senders.md](test-senders.md)) |
+| `vesc_test` | Fake VESC for a spare CYD ([test-senders.md](test-senders.md)) |
 
 ## Where to read next
 

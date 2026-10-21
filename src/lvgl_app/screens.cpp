@@ -11,7 +11,6 @@
 
 #include "cyd_dash_thumbnails_4bit.h"
 #include "config.h"
-#include "fardriver_ble.h"
 #include "firmware_update_ble.h"
 #include "companion_ble.h"
 #include "vesc_ble.h"
@@ -152,18 +151,6 @@ static constexpr uint8_t kPanelPageCount = 2;
 static uint8_t panelPage = 0;
 static constexpr uint8_t DISPLAY_USER_PAGE_COUNT = 2;
 static uint8_t displayPageCount() { return DISPLAY_USER_PAGE_COUNT; }
-static lv_obj_t *farDriverStatusLabel = NULL;
-static lv_obj_t *farDriverDetailLabel = NULL;
-static lv_obj_t *farDriverPairHintLabel = NULL;
-static lv_obj_t *farDriverServiceLabel = NULL;
-static lv_obj_t *farDriverCharacteristicLabel = NULL;
-static lv_obj_t *farDriverPacketLabel = NULL;
-static lv_obj_t *farDriverCountersLabel = NULL;
-static lv_obj_t *farDriverDecodedLabel = NULL;
-static lv_obj_t *farDriverDisconnectButton = NULL;
-static lv_obj_t *farDriverForgetButton = NULL;
-static uint32_t farDriverUiRevision = 0;
-static void refreshFarDriverBleScreen(bool force = false);
 static lv_obj_t *firmwareUpdateStateLabel = NULL;
 static lv_obj_t *firmwareUpdateDetailLabel = NULL;
 static lv_obj_t *firmwareUpdateProgress = NULL;
@@ -183,19 +170,18 @@ enum SettingsMenuLevel : uint8_t {
   SETTINGS_MENU_DEVELOPER,
 };
 static SettingsMenuLevel settingsMenuLevel = SETTINGS_MENU_DISPLAY;
-static ControllerType pendingControllerType = CONTROLLER_VESC;
 static ControllerConnection pendingControllerConnection = CONTROLLER_CONNECTION_UART;
 static const ControllerBackend *pendingControllerBackend() {
-  return controllerBackendById(controllerBackendIdFor(pendingControllerType, pendingControllerConnection));
+  return controllerBackendById(controllerBackendIdFor(pendingControllerConnection));
 }
 static const char *controllerTransportLabel(ControllerTransport transport, bool shortName = false) {
   if (transport == CONTROLLER_TRANSPORT_BLE) return shortName ? "BLE" : "Bluetooth LE";
   return shortName ? "UART" : txt("Wired UART", "UART-kaapeli", "Kabel-UART", "UART câblé",
                                   "UART por cable", "UART cablata");
 }
-enum ControllerSetupStage : uint8_t { CONTROLLER_SETUP_TYPE, CONTROLLER_SETUP_CONNECTION, CONTROLLER_SETUP_DISCOVERY,
+enum ControllerSetupStage : uint8_t { CONTROLLER_SETUP_CONNECTION, CONTROLLER_SETUP_DISCOVERY,
                                      CONTROLLER_SETUP_CONFIRM };
-static ControllerSetupStage controllerSetupStage = CONTROLLER_SETUP_TYPE;
+static ControllerSetupStage controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
 static uint32_t controllerSetupRevision = 0;
 static uint8_t controllerDeviceOffset = 0;
 // A scan the wizard has asked for but cannot start yet, because the running
@@ -237,9 +223,9 @@ static const uint8_t kGaugeFields[] = {SPEED_FIELD_BASE + SPEED_FIELD_TOP_SPEED,
                                      VEHICLE_FIELD_BATTERY_MAX_A, VEHICLE_FIELD_MOTOR_MAX_A};
 static const uint8_t kModeLabelFields[] = {VEHICLE_FIELD_MODE_LABEL_1, VEHICLE_FIELD_MODE_LABEL_2, VEHICLE_FIELD_MODE_LABEL_3};
 
-// Some controller fields only mean something for one backend or one link. They
-// are hidden rather than greyed out: a FarDriver rider has no CAN id to set,
-// and a UART baud rate is not a thing a Bluetooth link has.
+// Some controller fields only mean something for one link. They are hidden
+// rather than greyed out: a UART baud rate is not a thing a Bluetooth link has,
+// and a wired-only controller has no CAN target to set.
 static bool controllerFieldApplies(uint8_t field) {
   const ControllerCapabilities &caps = controllerCapabilities();
   switch (field) {
@@ -249,9 +235,8 @@ static bool controllerFieldApplies(uint8_t field) {
       return caps.hasCanTarget;
     case VEHICLE_FIELD_MOTOR_POLE_PAIRS:
     case VEHICLE_FIELD_DRIVE_RATIO:
-      // Not VESC-only after all: the FarDriver frames carry motor rpm and
-      // nothing else, so the pole count and gearing are what turn that into a
-      // road speed. Only a controller reporting its own speed makes them idle.
+      // A VESC that reports its own road speed makes these idle; one that only
+      // reports eRPM needs them to turn motor revolutions into distance.
       return !telemetrySpeedFromController();
     default:
       return true;
@@ -269,12 +254,9 @@ static uint8_t collectVisibleFields(const uint8_t *source, uint8_t sourceCount, 
 
 // The Configuration hub's cards, built rather than fixed so the screen and its
 // action handler can never disagree, and so a card only appears when it has
-// something to do: Ride Modes is a FarDriver page (that link reports gears),
-// and cruise needs a VESC link that accepts the control commands. That leaves
-// four cards on either link.
+// something to do. Cruise and profiles both need the VESC command path.
 static uint8_t controllerConfigSections(SubmenuType *out) {
   uint8_t n = 0;
-  if (controllerUsesFarDriverBle()) out[n++] = SUBMENU_SPEED;
   out[n++] = SUBMENU_SPEED_CALIBRATION;
   out[n++] = SUBMENU_GAUGE_RANGES;
   out[n++] = SUBMENU_PROFILES;
@@ -1269,9 +1251,8 @@ static void enableBluetoothForControllerSetup() {
 
 static void openControllerSetup() {
   enableBluetoothForControllerSetup();
-  pendingControllerType = controllerType;
   pendingControllerConnection = controllerConnection;
-  controllerSetupStage = CONTROLLER_SETUP_TYPE;
+  controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
   controllerDeviceOffset = 0;
   settingsMenuLevel = SETTINGS_MENU_CONTROLLER;
   submenuType = SUBMENU_CONTROLLER_TYPE;
@@ -1464,20 +1445,13 @@ static void refreshLinkOverlay(bool force) {
   // A dead link outranks a fault: with nothing arriving, the fault byte is as
   // stale as everything else on the screen.
   if (state != LINK_LIVE) {
-    const bool farDriver = controllerUsesFarDriverBle();
     const char *message =
         state == LINK_WAITING
-            ? (farDriver ? txt("WAITING FOR FARDRIVER DATA", "ODOTETAAN FARDRIVER-DATAA", "WARTE AUF FARDRIVER-DATEN",
-                               "ATTENTE DONNÉES FARDRIVER", "ESPERANDO DATOS FARDRIVER", "ATTESA DATI FARDRIVER")
-                         : txt("WAITING FOR VESC", "ODOTETAAN VESCIÄ", "WARTE AUF VESC", "ATTENTE VESC",
-                               "ESPERANDO VESC", "ATTESA VESC"))
-            : (farDriver ? txt("FARDRIVER CONNECTION LOST", "FARDRIVER-YHTEYS KATKESI",
-                               "FARDRIVER-VERBINDUNG WEG", "CONNEXION FARDRIVER PERDUE",
-                               "CONEXIÓN FARDRIVER PERDIDA", "CONNESSIONE FARDRIVER PERSA")
-                         : txt("VESC LINK LOST", "VESC-YHTEYS KATKESI", "VESC-VERBINDUNG WEG",
-                               "LIAISON VESC PERDUE", "ENLACE VESC PERDIDO", "LINK VESC PERSO"));
-    setAlertChip(message,
-                 kAlertLinkColor, kAlertLinkW, kAlertLinkY, true);
+            ? txt("WAITING FOR VESC", "ODOTETAAN VESCIÄ", "WARTE AUF VESC", "ATTENTE VESC",
+                  "ESPERANDO VESC", "ATTESA VESC")
+            : txt("VESC LINK LOST", "VESC-YHTEYS KATKESI", "VESC-VERBINDUNG WEG",
+                  "LIAISON VESC PERDUE", "ENLACE VESC PERDIDO", "LINK VESC PERSO");
+    setAlertChip(message, kAlertLinkColor, kAlertLinkW, kAlertLinkY, true);
     return;
   }
   if (fault != 0) {
@@ -1715,8 +1689,6 @@ void uiDashboardTick() {
       rideCatalogUiRevision = combinedRevision;
       queueLowMemoryRebuild(SCREEN_RIDE_LOGS);
     }
-  } else if (currentScreen == SCREEN_FARDRIVER_BLE && !rebuildQueued) {
-    refreshFarDriverBleScreen();
   } else if (currentScreen == SCREEN_FIRMWARE_UPDATE && !rebuildQueued) {
     refreshFirmwareUpdateScreen();
   } else if (currentScreen == SCREEN_COMPANION_MODE && !rebuildQueued) {
@@ -1904,7 +1876,7 @@ static const uint16_t kAutoReturnChoices[] = {30, 60, 120, 300, 600, 900, 1800, 
 static bool screenHandsBackToDashboard(ScreenMode mode) {
   return mode == SCREEN_MENU || mode == SCREEN_SUBMENU ||
          mode == SCREEN_PIN_SETUP || mode == SCREEN_PIN_LOCK || mode == SCREEN_TOUCH_TEST ||
-         mode == SCREEN_FARDRIVER_BLE || mode == SCREEN_RIDE_LOGS;
+         mode == SCREEN_RIDE_LOGS;
 }
 
 static void hideAutoReturnOverlay() {
@@ -2064,7 +2036,6 @@ enum MenuButtonId {
   BTN_RIDE_LOGS_CLEAR_SD,
   BTN_RIDE_LOGS_CLEAR_SD_CONFIRM,
   BTN_RIDE_LOGS_CLEAR_SD_DONE,
-  BTN_CONTROLLER_DIAGNOSTICS,
   BTN_FIRMWARE_UPDATE_ACTION,
   BTN_USER_COMPANION,
   BTN_COMPANION_ACTION,
@@ -2073,11 +2044,7 @@ enum MenuButtonId {
   BTN_LIGHT_SENSOR_CALIBRATE,
   BTN_LIGHT_SENSOR_SET_DARK,
   BTN_LIGHT_SENSOR_SET_BRIGHT,
-  BTN_FARDRIVER_DISCONNECT,
-  BTN_FARDRIVER_FORGET,
-  BTN_CONTROLLER_VESC = 600,
-  BTN_CONTROLLER_FARDRIVER,
-  BTN_CONTROLLER_UART,
+  BTN_CONTROLLER_UART = 600,
   BTN_CONTROLLER_BLE,
   BTN_CONTROLLER_RETRY,
   BTN_CONTROLLER_CONTINUE,
@@ -2298,9 +2265,8 @@ static void menuAction(int id) {
       queueRebuild(SCREEN_MENU);
       return;
     case BTN_MENU_CONTROLLER_CONNECTION:
-      pendingControllerType = controllerType;
       pendingControllerConnection = controllerConnection;
-      controllerSetupStage = CONTROLLER_SETUP_TYPE;
+      controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
       controllerDeviceOffset = 0;
       submenuType = SUBMENU_CONNECTION;
       break;
@@ -2354,9 +2320,6 @@ static void menuAction(int id) {
     case BTN_MENU_CHANGELOG:
       submenuType = SUBMENU_CHANGELOG;
       break;
-    case BTN_CONTROLLER_DIAGNOSTICS:
-      queueLowMemoryRebuild(SCREEN_FARDRIVER_BLE);
-      return;
     case BTN_MENU_BATTERY:
       submenuType = SUBMENU_BATTERY;
       break;
@@ -3207,19 +3170,10 @@ static void showMenu() {
                    txt("Defaults", "Oletukset", "Standard", "Par défaut", "Por defecto", "Predef."), false,
                    BTN_MENU_RESET);
   } else if (settingsMenuLevel == SETTINGS_MENU_DEVELOPER) {
-    // Diagnostics exist only for BLE controllers; without them the remaining
-    // four cards share the page in two taller rows.
-    const bool showDiagnostics = controllerCapabilities().hasLinkDiagnostics;
-    if (showDiagnostics)
-      makeMenuButton(scr, kMenuEdgeX, 48, kMenuContentW, 54,
-                     txt("DIAGNOSTICS", "DIAGNOSTIIKKA", "DIAGNOSE", "DIAGNOSTIC", "DIAGNÓSTICO", "DIAGNOSTICA"),
-                     txt("Raw BLE packets", "BLE-raakapaketit", "BLE-Rohpakete", "Paquets BLE bruts",
-                         "Paquetes BLE", "Pacchetti BLE"),
-                     false, BTN_CONTROLLER_DIAGNOSTICS);
-    const int firstRowY = showDiagnostics ? 107 : 48;
-    const int firstRowH = showDiagnostics ? 57 : 88;
-    const int secondRowY = showDiagnostics ? 169 : 142;
-    const int secondRowH = showDiagnostics ? 61 : 88;
+    const int firstRowY = 48;
+    const int firstRowH = 88;
+    const int secondRowY = 142;
+    const int secondRowH = 88;
     makeMenuButton(scr, kMenuEdgeX, firstRowY, kTwoColLeftW, firstRowH,
                    txt("DEMO MODE", "DEMOTILA", "DEMO-MODUS", "MODE DÉMO", "MODO DEMO", "MODALITÀ DEMO"),
                    dashboardDemoModeEnabled
@@ -3303,274 +3257,6 @@ static void showMenu() {
     makeMenuTopBar(scr, title, 1, 2, true);
   else
     makeMenuTopBar(scr, title, 1, 1, false);
-  loadScreen(scr);
-}
-
-// ── FarDriver BLE developer diagnostic ──────────────────────────────────────
-
-static const char *farDriverStateName(FarDriverBleState state) {
-  switch (state) {
-    case FARDRIVER_BLE_SCANNING:
-      return txt("SCANNING", "HAETAAN", "SUCHE", "RECHERCHE", "BUSCANDO", "RICERCA");
-    case FARDRIVER_BLE_CONNECTING:
-      return txt("CONNECTING", "YHDISTETÄÄN", "VERBINDET", "CONNEXION", "CONECTANDO", "CONNESSIONE");
-    case FARDRIVER_BLE_DISCOVERING:
-      return txt("DISCOVERING", "TUTKITAAN", "ERKENNUNG", "DÉTECTION", "DETECTANDO", "RILEVAMENTO");
-    case FARDRIVER_BLE_CONNECTED:
-      return txt("CONNECTED", "YHDISTETTY", "VERBUNDEN", "CONNECTÉ", "CONECTADO", "CONNESSO");
-    case FARDRIVER_BLE_ERROR:
-      return txt("ERROR", "VIRHE", "FEHLER", "ERREUR", "ERROR", "ERRORE");
-    case FARDRIVER_BLE_IDLE:
-    default:
-      return txt("READY", "VALMIS", "BEREIT", "PRÊT", "LISTO", "PRONTO");
-  }
-}
-
-// Rider-facing sentence for a Bluetooth link's state.
-//
-// The backends also publish a free-text `message`, but it is written in English
-// by the transport layer and cannot be translated there without dragging the
-// localisation layer into it. The state enum is the part worth showing, so the
-// UI maps that instead - the same split the VESC fault codes already use, where
-// the transport hands over a number and telemetryFaultLabel() names it.
-// The English detail keeps its place in the serial log and in the raw packet
-// view, where a technical reading is what is wanted.
-static const char *bleLinkStateDetail(uint8_t state, bool connecting, bool discovering, bool connected,
-                                      bool error, bool savedDevice) {
-  if (connected)
-    return txt("Connected", "Yhdistetty", "Verbunden", "Connecté", "Conectado", "Connesso");
-  if (discovering)
-    return txt("Reading services...", "Luetaan palveluita...", "Dienste werden gelesen...",
-               "Lecture des services...", "Leyendo servicios...", "Lettura servizi...");
-  if (connecting)
-    return txt("Connecting...", "Yhdistetään...", "Verbinde...", "Connexion...", "Conectando...",
-               "Connessione...");
-  if (error)
-    return txt("Connection failed - try again", "Yhteys epäonnistui - yritä uudelleen",
-               "Verbindung fehlgeschlagen - erneut versuchen", "Échec - réessayez",
-               "Error de conexión - inténtelo de nuevo", "Connessione fallita - riprova");
-  if (state == 1)  // scanning
-    return txt("Searching for devices...", "Etsitään laitteita...", "Suche nach Geräten...",
-               "Recherche d'appareils...", "Buscando dispositivos...", "Ricerca dispositivi...");
-  if (savedDevice)
-    return txt("Not connected", "Ei yhteyttä", "Nicht verbunden", "Non connecté", "Sin conexión",
-               "Non connesso");
-  return txt("Select a Bluetooth device", "Valitse Bluetooth-laite", "Bluetooth-Gerät wählen",
-             "Choisir un appareil", "Elija un dispositivo", "Seleziona un dispositivo");
-}
-
-static const char *farDriverStateDetail(const FarDriverBleStatus &status) {
-  return bleLinkStateDetail(status.state == FARDRIVER_BLE_SCANNING ? 1 : 0,
-                            status.state == FARDRIVER_BLE_CONNECTING,
-                            status.state == FARDRIVER_BLE_DISCOVERING,
-                            status.state == FARDRIVER_BLE_CONNECTED,
-                            status.state == FARDRIVER_BLE_ERROR, status.savedDevice);
-}
-
-// A failed connect says only "try again" everywhere else, which is fine next
-// to a diagnostics screen but useless in the wizard, where the tap that failed
-// is the only thing the rider did. The backends already classify the reason.
-static const char *controllerLinkErrorDetail(ControllerLinkError error) {
-  switch (error) {
-    case CONTROLLER_LINK_ERR_SCAN_FAILED:
-      return txt("Scan could not start", "Haku ei käynnisty", "Suche startet nicht",
-                 "Recherche impossible", "No se pudo buscar", "Ricerca non avviata");
-    case CONTROLLER_LINK_ERR_DEVICE_GONE:
-      return txt("Device gone - scan again", "Laite kadonnut - hae uudelleen",
-                 "Gerät weg - neu suchen", "Appareil perdu - rechercher",
-                 "Dispositivo perdido - buscar", "Dispositivo perso - ricerca");
-    case CONTROLLER_LINK_ERR_SERVICE_MISSING:
-      return txt("No controller service", "Ei ohjainpalvelua", "Kein Controller-Dienst",
-                 "Aucun service contrôleur", "Sin servicio de controlador", "Nessun servizio");
-    case CONTROLLER_LINK_ERR_SUBSCRIBE_FAILED:
-      return txt("Controller refused data", "Ohjain esti datan", "Controller lehnt Daten ab",
-                 "Contrôleur refuse les données", "El controlador rechazó datos",
-                 "Controller rifiuta i dati");
-    case CONTROLLER_LINK_ERR_WORKER_FAILED:
-      return txt("Bluetooth task failed", "Bluetooth-tehtävä kaatui", "Bluetooth-Task fehlt",
-                 "Tâche Bluetooth échouée", "Fallo de tarea Bluetooth", "Attività Bluetooth fallita");
-    case CONTROLLER_LINK_ERR_BUSY:
-      return txt("Bluetooth busy - try again", "Bluetooth varattu - yritä taas",
-                 "Bluetooth belegt - erneut", "Bluetooth occupé - réessayez",
-                 "Bluetooth ocupado - reintente", "Bluetooth occupato - riprova");
-    case CONTROLLER_LINK_ERR_CONNECT_FAILED:
-    case CONTROLLER_LINK_ERR_NONE:
-    default:
-      return txt("Connection failed - try again", "Yhteys epäonnistui - yritä uudelleen",
-                 "Verbindung fehlgeschlagen", "Échec - réessayez",
-                 "Error de conexión - reintente", "Connessione fallita - riprova");
-  }
-}
-
-static const char *controllerLinkStateDetail(const ControllerLinkStatus &status) {
-  return bleLinkStateDetail(status.state == CONTROLLER_LINK_SCANNING ? 1 : 0,
-                            status.state == CONTROLLER_LINK_CONNECTING,
-                            status.state == CONTROLLER_LINK_DISCOVERING,
-                            status.state == CONTROLLER_LINK_CONNECTED,
-                            status.state == CONTROLLER_LINK_FAILED, status.savedDevice);
-}
-
-static void setFarDriverObjectVisible(lv_obj_t *object, bool visible) {
-  if (!object) return;
-  if (visible) lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void setFarDriverButtonEnabled(lv_obj_t *button, bool enabled) {
-  if (!button) return;
-  if (enabled) lv_obj_clear_state(button, LV_STATE_DISABLED);
-  else lv_obj_add_state(button, LV_STATE_DISABLED);
-}
-
-static void formatFarDriverUuid(char *output, size_t outputSize, const char *label, const char *uuid) {
-  if (!uuid || !uuid[0]) {
-    snprintf(output, outputSize, "%s  discovering...", label);
-    return;
-  }
-  const size_t length = strlen(uuid);
-  if (length > 20) {
-    snprintf(output, outputSize, "%s  %.8s...%.8s", label, uuid, uuid + length - 8);
-    return;
-  }
-  snprintf(output, outputSize, "%s  %s", label, uuid);
-}
-
-static void refreshFarDriverBleScreen(bool force) {
-  if (currentScreen != SCREEN_FARDRIVER_BLE || !farDriverStatusLabel) return;
-  const FarDriverBleStatus status = farDriverBleStatus();
-  if (!force && status.revision == farDriverUiRevision) return;
-  farDriverUiRevision = status.revision;
-
-  char text[128];
-  snprintf(text, sizeof(text), "FARDRIVER BLE  |  %s", farDriverStateName(status.state));
-  setLabelText(farDriverStatusLabel, text);
-  lv_obj_set_style_text_color(farDriverStatusLabel,
-                              status.state == FARDRIVER_BLE_CONNECTED
-                                  ? c565(COLOR565_GREEN)
-                                  : status.state == FARDRIVER_BLE_ERROR ? c565(0xFBE0) : lv_color_white(),
-                              0);
-
-  const bool diagnostic = status.state == FARDRIVER_BLE_CONNECTING || status.state == FARDRIVER_BLE_DISCOVERING ||
-                          status.state == FARDRIVER_BLE_CONNECTED;
-  if (diagnostic && status.connectedAddress[0])
-    snprintf(text, sizeof(text), "%s   RSSI %d dBm", status.connectedAddress, status.connectedRssi);
-  else if (status.savedDevice)
-    snprintf(text, sizeof(text), "%s  |  %s %s", farDriverStateDetail(status),
-             txt("Paired", "Paritettu", "Gekoppelt", "Associé", "Vinculado", "Associato"),
-             status.savedAddress);
-  else
-    snprintf(text, sizeof(text), "%s", farDriverStateDetail(status));
-  setLabelText(farDriverDetailLabel, text);
-
-  setFarDriverObjectVisible(farDriverPairHintLabel, !diagnostic && !status.savedDevice);
-
-  setFarDriverObjectVisible(farDriverServiceLabel, diagnostic);
-  setFarDriverObjectVisible(farDriverCharacteristicLabel, diagnostic);
-  setFarDriverObjectVisible(farDriverPacketLabel, diagnostic);
-  setFarDriverObjectVisible(farDriverCountersLabel, diagnostic);
-  setFarDriverObjectVisible(farDriverDecodedLabel, diagnostic);
-  if (diagnostic) {
-    formatFarDriverUuid(text, sizeof(text), "SERVICE", status.serviceUuid);
-    setLabelText(farDriverServiceLabel, text);
-    formatFarDriverUuid(text, sizeof(text), "NOTIFY", status.characteristicUuid);
-    setLabelText(farDriverCharacteristicLabel, text);
-    snprintf(text, sizeof(text), "RAW %u B  %s", status.lastPacketLength,
-             status.lastPacketHex[0] ? status.lastPacketHex : "Waiting for first packet...");
-    setLabelText(farDriverPacketLabel, text);
-    snprintf(text, sizeof(text), "FRAMES %lu   ID %02X   CRC FAIL %lu   SKIP %lu B",
-             (unsigned long)status.frameCount, status.lastFrameId, (unsigned long)status.crcFailCount,
-             (unsigned long)status.discardedBytes);
-    setLabelText(farDriverCountersLabel, text);
-
-    // km/h is taken from the live snapshot rather than recomputed here, so this
-    // is the same number the dashboard shows and the motion auto-return acts on.
-    const FarDriverTelemetry telemetry = farDriverTelemetry();
-    DashboardValues live = {};
-    const bool haveLive = getLiveDashboardValues(live);
-    snprintf(text, sizeof(text), "%.1f V  %.1f A   RPM %d   GEAR %u   %s",
-             telemetry.voltage, telemetry.current, telemetry.rawRpm, (unsigned)telemetry.gear,
-             haveLive ? "" : "(no live sample)");
-    if (haveLive) {
-      const size_t used = strlen(text);
-      snprintf(text + used, sizeof(text) - used, "%d km/h", live.speedKmh);
-    }
-    setLabelText(farDriverDecodedLabel, text);
-  }
-
-  setFarDriverButtonEnabled(farDriverDisconnectButton, diagnostic);
-  setFarDriverButtonEnabled(farDriverForgetButton, status.savedDevice);
-}
-
-static void farDriverBleAction(int id) {
-  if (id == BTN_BACK) {
-    settingsMenuLevel = developerOptionsEnabled ? SETTINGS_MENU_DEVELOPER : SETTINGS_MENU_CONTROLLER;
-    queueLowMemoryRebuild(SCREEN_MENU);
-    return;
-  }
-  if (id == BTN_FARDRIVER_DISCONNECT) farDriverBleDisconnect();
-  else if (id == BTN_FARDRIVER_FORGET) farDriverBleForget();
-  refreshFarDriverBleScreen(true);
-}
-
-static void showFarDriverBleDiagnostic() {
-  currentAction = farDriverBleAction;
-  farDriverBleBegin();
-  lv_obj_t *scr = makeScreen();
-  makeMenuTopBar(scr, txt("LINK DIAGNOSTICS", "YHTEYSDIAGNOSTIIKKA", "LINK-DIAGNOSE", "DIAGNOSTIC LIAISON",
-                          "DIAGNÓSTICO ENLACE", "DIAGNOSTICA LINK"),
-                 1, 1, false);
-
-  lv_obj_t *statusPanel = makeInfoPanel(scr, kMenuEdgeX, 48, kMenuContentW, 30, 6);
-  farDriverStatusLabel = makeLabelAt(statusPanel, 152, 8, "", lv_color_white(), &lv_font_rajdhani_12, 3);
-  farDriverDetailLabel = makeLabelAt(scr, 160, 82, "", c565(COLOR565_LABEL), &lv_font_rajdhani_12, 3);
-  lv_obj_set_width(farDriverDetailLabel, 304);
-  lv_obj_set_style_text_align(farDriverDetailLabel, LV_TEXT_ALIGN_CENTER, 0);
-  farDriverPairHintLabel = makeLabelAt(
-      scr, 160, 120,
-      txt("No device paired. Pair one under Vehicle Configuration > Connection.",
-          "Ei paritettua laitetta. Parita se kohdassa Ohjainasetukset > Yhteys.",
-          "Kein Gerät gekoppelt. Koppeln unter Controller-Einstellungen > Verbindung.",
-          "Aucun appareil associé. Associez-en un dans Réglages contrôleur > Connexion.",
-          "Ningún dispositivo vinculado. Vincúlelo en Ajustes del controlador > Conexión.",
-          "Nessun dispositivo associato. Associalo in Impostazioni controller > Connessione."),
-      c565(COLOR565_LABEL), &lv_font_rajdhani_12, 3);
-  lv_obj_set_x(farDriverPairHintLabel, 20);
-  lv_obj_set_width(farDriverPairHintLabel, 280);
-  lv_obj_set_style_text_align(farDriverPairHintLabel, LV_TEXT_ALIGN_CENTER, 0);
-
-  farDriverServiceLabel = makeLabelAt(scr, 8, 100, "", lv_color_white(), &lv_font_rajdhani_12, 0);
-  farDriverCharacteristicLabel = makeLabelAt(scr, 8, 117, "", lv_color_white(), &lv_font_rajdhani_12, 0);
-  farDriverPacketLabel = makeLabelAt(scr, 8, 136, "", c565(COLOR565_LABEL), &lv_font_rajdhani_12, 0);
-  lv_obj_set_size(farDriverPacketLabel, 304, 32);
-  lv_label_set_long_mode(farDriverPacketLabel, LV_LABEL_LONG_WRAP);
-  farDriverCountersLabel = makeLabelAt(scr, 8, 170, "", lv_color_white(), &lv_font_rajdhani_12, 0);
-  // What the bytes above actually decoded to. Raw hex says the link works;
-  // this says whether the numbers coming out of it are believable, which is
-  // the question a bring-up on unknown hardware keeps running into.
-  farDriverDecodedLabel = makeLabelAt(scr, 8, 187, "", c565(COLOR565_LABEL), &lv_font_rajdhani_12, 0);
-
-  farDriverDisconnectButton = makeMenuButton(
-      scr, kMenuEdgeX, 204, kTwoColLeftW, 34,
-      txt("DISCONNECT", "KATKAISE", "TRENNEN", "DÉCONNECTER", "DESCONECTAR", "DISCONNETTI"), "", false,
-      BTN_FARDRIVER_DISCONNECT);
-  farDriverForgetButton = makeMenuButton(
-      scr, kTwoColRightX, 204, kTwoColRightW, 34, txt("FORGET", "UNOHDA", "VERGESSEN", "OUBLIER", "OLVIDAR", "DIMENTICA"), "", false,
-      BTN_FARDRIVER_FORGET);
-  const int actionWidths[] = {150, 150};
-  lv_obj_t *actionButtons[] = {farDriverDisconnectButton, farDriverForgetButton};
-  for (uint8_t i = 0; i < 2; i++) {
-    lv_obj_t *button = actionButtons[i];
-    lv_obj_t *label = lv_obj_get_child(button, 0);
-    if (label) {
-      lv_obj_set_width(label, actionWidths[i] - 20);
-      lv_obj_set_x(label, 4);
-      lv_obj_set_y(label, 11);
-      lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    }
-  }
-
-  farDriverUiRevision = 0;
-  refreshFarDriverBleScreen(true);
   loadScreen(scr);
 }
 
@@ -4033,6 +3719,75 @@ static void showFirmwareUpdate() {
   refreshFirmwareUpdateScreen(true);
 }
 
+// Rider-facing sentence for a Bluetooth link's state. The transport keeps its
+// free-text message in English for the log; the UI maps the state enum so it can
+// be translated.
+static const char *bleLinkStateDetail(uint8_t state, bool connecting, bool discovering, bool connected,
+                                      bool error, bool savedDevice) {
+  if (connected)
+    return txt("Connected", "Yhdistetty", "Verbunden", "Connecté", "Conectado", "Connesso");
+  if (discovering)
+    return txt("Reading services...", "Luetaan palveluita...", "Dienste werden gelesen...",
+               "Lecture des services...", "Leyendo servicios...", "Lettura servizi...");
+  if (connecting)
+    return txt("Connecting...", "Yhdistetään...", "Verbinde...", "Connexion...", "Conectando...",
+               "Connessione...");
+  if (error)
+    return txt("Connection failed - try again", "Yhteys epäonnistui - yritä uudelleen",
+               "Verbindung fehlgeschlagen - erneut versuchen", "Échec - réessayez",
+               "Error de conexión - inténtelo de nuevo", "Connessione fallita - riprova");
+  if (state == 1)  // scanning
+    return txt("Searching for devices...", "Etsitään laitteita...", "Suche nach Geräten...",
+               "Recherche d'appareils...", "Buscando dispositivos...", "Ricerca dispositivi...");
+  if (savedDevice)
+    return txt("Not connected", "Ei yhteyttä", "Nicht verbunden", "Non connecté", "Sin conexión",
+               "Non connesso");
+  return txt("Select a Bluetooth device", "Valitse Bluetooth-laite", "Bluetooth-Gerät wählen",
+             "Choisir un appareil", "Elija un dispositivo", "Seleziona un dispositivo");
+}
+
+// A failed connect says only "try again" everywhere else, which is useless in
+// the wizard, where the tap that failed is the only thing the rider did.
+static const char *controllerLinkErrorDetail(ControllerLinkError error) {
+  switch (error) {
+    case CONTROLLER_LINK_ERR_SCAN_FAILED:
+      return txt("Scan could not start", "Haku ei käynnisty", "Suche startet nicht",
+                 "Recherche impossible", "No se pudo buscar", "Ricerca non avviata");
+    case CONTROLLER_LINK_ERR_DEVICE_GONE:
+      return txt("Device gone - scan again", "Laite kadonnut - hae uudelleen",
+                 "Gerät weg - neu suchen", "Appareil perdu - rechercher",
+                 "Dispositivo perdido - buscar", "Dispositivo perso - ricerca");
+    case CONTROLLER_LINK_ERR_SERVICE_MISSING:
+      return txt("No controller service", "Ei ohjainpalvelua", "Kein Controller-Dienst",
+                 "Aucun service contrôleur", "Sin servicio de controlador", "Nessun servizio");
+    case CONTROLLER_LINK_ERR_SUBSCRIBE_FAILED:
+      return txt("Controller refused data", "Ohjain esti datan", "Controller lehnt Daten ab",
+                 "Contrôleur refuse les données", "El controlador rechazó datos",
+                 "Controller rifiuta i dati");
+    case CONTROLLER_LINK_ERR_WORKER_FAILED:
+      return txt("Bluetooth task failed", "Bluetooth-tehtävä kaatui", "Bluetooth-Task fehlt",
+                 "Tâche Bluetooth échouée", "Fallo de tarea Bluetooth", "Attività Bluetooth fallita");
+    case CONTROLLER_LINK_ERR_BUSY:
+      return txt("Bluetooth busy - try again", "Bluetooth varattu - yritä taas",
+                 "Bluetooth belegt - erneut", "Bluetooth occupé - réessayez",
+                 "Bluetooth ocupado - reintente", "Bluetooth occupato - riprova");
+    case CONTROLLER_LINK_ERR_CONNECT_FAILED:
+    case CONTROLLER_LINK_ERR_NONE:
+    default:
+      return txt("Connection failed - try again", "Yhteys epäonnistui - yritä uudelleen",
+                 "Verbindung fehlgeschlagen", "Échec - réessayez",
+                 "Error de conexión - reintente", "Connessione fallita - riprova");
+  }
+}
+
+static const char *controllerLinkStateDetail(const ControllerLinkStatus &status) {
+  return bleLinkStateDetail(status.state == CONTROLLER_LINK_SCANNING ? 1 : 0,
+                            status.state == CONTROLLER_LINK_CONNECTING,
+                            status.state == CONTROLLER_LINK_DISCOVERING,
+                            status.state == CONTROLLER_LINK_CONNECTED,
+                            status.state == CONTROLLER_LINK_FAILED, status.savedDevice);
+}
+
 // ── Submenu ───────────────────────────────────────────────────────────────────
 
 static uint8_t submenuItemCount() {
@@ -4058,7 +3813,7 @@ static uint8_t submenuItemCount() {
     case SUBMENU_RESET:
       return 2;
     case SUBMENU_CONTROLLER_TYPE:
-      return CONTROLLER_TYPE_COUNT;
+      return 2;
     case SUBMENU_AUTO_RETURN:
       return 1;
     case SUBMENU_CRUISE:
@@ -4098,7 +3853,7 @@ static uint8_t submenuItemIndex() {
     case SUBMENU_RESET:
       return 1;
     case SUBMENU_CONTROLLER_TYPE:
-      return static_cast<uint8_t>(pendingControllerType) + 1;
+      return static_cast<uint8_t>(pendingControllerConnection) + 1;
     case SUBMENU_CRUISE:
       return cruisePage + 1;
     case SUBMENU_PROFILES:
@@ -4153,7 +3908,7 @@ static const char *submenuCurrentName() {
     case SUBMENU_RESET:
       return txt("Choose reset type", "Valitse nollaus", "Reset-Typ", "Type de réinit.", "Tipo de reinicio", "Tipo di reset");
     case SUBMENU_CONTROLLER_TYPE:
-      return pendingControllerType == CONTROLLER_FARDRIVER ? "FarDriver | Bluetooth LE" : "VESC";
+      return pendingControllerConnection == CONTROLLER_CONNECTION_BLE ? "VESC | Bluetooth LE" : "VESC | Wired UART";
     case SUBMENU_AUTO_RETURN:
       return autoReturnEnabled
                  ? txt("Return timer enabled", "Paluuaika käytössä", "Rückkehr-Timer aktiv", "Minuteur actif",
@@ -4163,7 +3918,8 @@ static const char *submenuCurrentName() {
     case SUBMENU_CRUISE:
       if (cruisePage == 0)
         return txt("Speed window", "Nopeusikkuna", "Tempo-Fenster", "Plage de vitesse", "Ventana de velocidad", "Finestra velocità");
-      return txt("Modes & engage", "Tilat ja käyttö", "Modi & Start", "Modes et activation", "Modos y activación", "Modalità e attivazione");
+      return txt("State & cancel", "Tila ja peruutus", "Status & Abbrechen", "État et annulation",
+                 "Estado y cancelación", "Stato e annullamento");
     case SUBMENU_PROFILES:
       if (profilePage == 0)
         return txt("Profiles", "Profiilit", "Profile", "Profils", "Perfiles", "Profili");
@@ -4281,18 +4037,6 @@ static void submenuAction(int id) {
     }
   }
   if (submenuType == SUBMENU_CONTROLLER_TYPE) {
-    if (id == BTN_CONTROLLER_VESC || id == BTN_CONTROLLER_FARDRIVER) {
-      pendingControllerType = id == BTN_CONTROLLER_VESC ? CONTROLLER_VESC : CONTROLLER_FARDRIVER;
-      if (pendingControllerType == CONTROLLER_FARDRIVER) {
-        pendingControllerConnection = CONTROLLER_CONNECTION_BLE;
-        controllerSetupStage = CONTROLLER_SETUP_DISCOVERY;
-        requestControllerScan();
-      } else {
-        controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
-      }
-      queueLowMemoryRebuild(SCREEN_SUBMENU);
-      return;
-    }
     if (id == BTN_CONTROLLER_UART || id == BTN_CONTROLLER_BLE) {
       pendingControllerConnection = id == BTN_CONTROLLER_UART ? CONTROLLER_CONNECTION_UART : CONTROLLER_CONNECTION_BLE;
       if (pendingControllerConnection == CONTROLLER_CONNECTION_UART) {
@@ -4332,22 +4076,15 @@ static void submenuAction(int id) {
       return;
     }
     if (id == BTN_CONTROLLER_CANCEL_APPLY) {
-      controllerSetupStage = pendingControllerType == CONTROLLER_VESC &&
-                                     pendingControllerConnection == CONTROLLER_CONNECTION_UART
-                                 ? CONTROLLER_SETUP_CONNECTION : CONTROLLER_SETUP_TYPE;
+      controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
       queueLowMemoryRebuild(SCREEN_SUBMENU);
       return;
     }
     if (id == BTN_CONTROLLER_APPLY) {
-      const ControllerType type = pendingControllerType;
-      const ControllerConnection connection =
-          pendingControllerType == CONTROLLER_FARDRIVER ? CONTROLLER_CONNECTION_BLE : pendingControllerConnection;
+      const ControllerConnection connection = pendingControllerConnection;
       // The switch is asynchronous and sets the selection itself; write it here
       // too so a selection that needs no switch still persists.
-      if (!controllerManagerSwitchTo(type, connection)) {
-        controllerType = type;
-        controllerConnection = connection;
-      }
+      if (!controllerManagerSwitchTo(connection)) controllerConnection = connection;
       saveAppSettings();
       // The wizard is finished: say so and hand the display back, the same way
       // the first-boot configurator ends. Landing back in the settings menu
@@ -4398,10 +4135,6 @@ static void submenuAction(int id) {
       prepareConfiguratorThemeStep();
       queueLowMemoryRebuild(SCREEN_SUBMENU);
     }
-    return;
-  }
-  if (id == BTN_CONTROLLER_DIAGNOSTICS) {
-    queueLowMemoryRebuild(SCREEN_FARDRIVER_BLE);
     return;
   }
   if (id == BTN_RESET_CANCEL) {
@@ -4537,10 +4270,8 @@ static void submenuAction(int id) {
         queueRebuild(SCREEN_SUBMENU);
         return;
       }
-      if (submenuType == SUBMENU_CONTROLLER_TYPE && controllerSetupStage != CONTROLLER_SETUP_TYPE) {
-        if (controllerSetupStage == CONTROLLER_SETUP_CONNECTION) controllerSetupStage = CONTROLLER_SETUP_TYPE;
-        else if (pendingControllerType == CONTROLLER_VESC) controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
-        else controllerSetupStage = CONTROLLER_SETUP_TYPE;
+      if (submenuType == SUBMENU_CONTROLLER_TYPE && controllerSetupStage != CONTROLLER_SETUP_CONNECTION) {
+        controllerSetupStage = CONTROLLER_SETUP_CONNECTION;
         queueLowMemoryRebuild(SCREEN_SUBMENU);
         return;
       }
@@ -4690,10 +4421,6 @@ static void submenuAction(int id) {
     case SUBMENU_UNITS:
       unitMode = static_cast<UnitMode>(constrain(option, 0, 3));
       break;
-    case SUBMENU_CONTROLLER_TYPE:
-      pendingControllerType = static_cast<ControllerType>(constrain(option, 0, (int)CONTROLLER_TYPE_COUNT - 1));
-      queueRebuild(SCREEN_SUBMENU);
-      return;
     case SUBMENU_PIN:
       if (option == 0) {
         pinEnabled = false;
@@ -4801,8 +4528,8 @@ static void submenuAction(int id) {
       }
       if (option == VEHICLE_FIELD_SETUP) {
         enableBluetoothForControllerSetup();
-        pendingControllerType = controllerType; pendingControllerConnection = controllerConnection;
-        controllerSetupStage = CONTROLLER_SETUP_TYPE; controllerDeviceOffset = 0;
+        pendingControllerConnection = controllerConnection;
+        controllerSetupStage = CONTROLLER_SETUP_CONNECTION; controllerDeviceOffset = 0;
         submenuType = SUBMENU_CONTROLLER_TYPE; queueRebuild(SCREEN_SUBMENU); return;
       }
       if (option != VEHICLE_FIELD_VESC_BAUD && option != VEHICLE_FIELD_VESC_CAN_ID) return;
@@ -6162,9 +5889,6 @@ static void showSubmenu() {
                                "Inactif - aucune liaison", "Desactivado - sin enlace", "Spento - nessun collegamento"),
                      bluetoothEnabled, BTN_OPTION_BASE + kConnectionBluetoothOption);
     makeVehicleFields(scr, kConnectionFields, sizeof(kConnectionFields), bluetoothLink ? 168 : 108);
-    if (controllerCapabilities().hasLinkDiagnostics)
-      makeMenuButton(scr, kMenuEdgeX, 172, kMenuContentW, 52,
-                     txt("LINK DIAGNOSTICS", "YHTEYSDIAGNOSTIIKKA", "LINK-DIAGNOSE", "DIAGNOSTIC", "DIAGNÓSTICO", "DIAGNOSTICA"), "", false, BTN_CONTROLLER_DIAGNOSTICS);
     loadScreen(scr); return;
   }
   if (submenuType == SUBMENU_GAUGE_RANGES) {
@@ -6385,18 +6109,7 @@ static void showSubmenu() {
   }
   if (submenuType == SUBMENU_CONTROLLER_TYPE) {
     makeMenuTopBar(scr, title, 1, 1, false);
-    if (controllerSetupStage == CONTROLLER_SETUP_TYPE) {
-      makeLabelAt(scr, 160, 48, txt("CHOOSE THE CONTROLLER FAMILY", "VALITSE OHJAIMEN TYYPPI",
-                                    "CONTROLLER-FAMILIE WÄHLEN", "CHOISIR LE CONTRÔLEUR",
-                                    "ELEGIR EL CONTROLADOR", "SCEGLI IL CONTROLLER"),
-                  c565(COLOR565_LABEL), &lv_font_rajdhani_12, 3);
-      makeMenuButton(scr, kMenuEdgeX, 66, kMenuContentW, 66, "VESC",
-                     txt("UART or Bluetooth LE", "UART tai Bluetooth LE", "UART oder Bluetooth LE",
-                         "UART ou Bluetooth LE", "UART o Bluetooth LE", "UART o Bluetooth LE"),
-                     false, BTN_CONTROLLER_VESC);
-      makeMenuButton(scr, kMenuEdgeX, 140, kMenuContentW, 66, "FARDRIVER", "Bluetooth LE", false,
-                     BTN_CONTROLLER_FARDRIVER);
-    } else if (controllerSetupStage == CONTROLLER_SETUP_CONNECTION) {
+    if (controllerSetupStage == CONTROLLER_SETUP_CONNECTION) {
       makeLabelAt(scr, 160, 48, txt("HOW IS THE VESC CONNECTED?", "MITEN VESC ON YHDISTETTY?",
                                     "WIE IST DER VESC VERBUNDEN?", "COMMENT LE VESC EST-IL CONNECTÉ ?",
                                     "¿CÓMO ESTÁ CONECTADO EL VESC?", "COME È COLLEGATO IL VESC?"),
@@ -6768,10 +6481,9 @@ static void showSubmenu() {
     const ControllerBackend *backend = activeControllerBackend();
     snprintf(controllerValue, sizeof(controllerValue), "%s | %s", controllerTypeName(),
              controllerTransportLabel(backend ? backend->transport : CONTROLLER_TRANSPORT_UART));
-    // A controller transport can be live before it publishes decoded
-    // telemetry. This is currently always true for FarDriver, whose packet map
-    // is still provisional. Report the selected transport here; the dashboard
-    // separately reports whether usable telemetry is arriving.
+    // A controller transport can be connected before it publishes usable
+    // telemetry. Report the selected transport here; the dashboard separately
+    // reports whether usable telemetry is arriving.
     TelemetryLink infoLinkState = telemetryLinkState();
     if (backend && backend->caps.showsDeviceList && backend->linkStatus) {
       const ControllerLinkState state = backend->linkStatus().state;
@@ -8415,8 +8127,7 @@ void uiShow(ScreenMode mode) {
                              mode == SCREEN_RIDE_LOGS || mode == SCREEN_RIDE_REPLAY);
   // These screens scan, pick or deliberately disconnect a controller, so the
   // manager must not redial the saved one behind them.
-  controllerManagerSetSetupOpen((mode == SCREEN_SUBMENU && submenuType == SUBMENU_CONTROLLER_TYPE) ||
-                                mode == SCREEN_FARDRIVER_BLE);
+  controllerManagerSetSetupOpen(mode == SCREEN_SUBMENU && submenuType == SUBMENU_CONTROLLER_TYPE);
   pinMaskLabel = NULL;
   pinNoticeLabel = NULL;
   cancelPinLockoutTimer();  // showPinLock re-arms it if a lockout is still running
@@ -8430,16 +8141,6 @@ void uiShow(ScreenMode mode) {
   touchTestClear = NULL;
   touchTestInstruction = NULL;
   touchTestChromeHidden = false;
-  farDriverStatusLabel = NULL;
-  farDriverDetailLabel = NULL;
-  farDriverPairHintLabel = NULL;
-  farDriverServiceLabel = NULL;
-  farDriverCharacteristicLabel = NULL;
-  farDriverPacketLabel = NULL;
-  farDriverCountersLabel = NULL;
-  farDriverDecodedLabel = NULL;
-  farDriverDisconnectButton = NULL;
-  farDriverForgetButton = NULL;
   firmwareUpdateStateLabel = NULL;
   firmwareUpdateDetailLabel = NULL;
   firmwareUpdateProgress = NULL;
@@ -8508,9 +8209,6 @@ void uiShow(ScreenMode mode) {
     case SCREEN_TOUCH_TEST:
       showTouchTest();
       break;
-    case SCREEN_FARDRIVER_BLE:
-      showFarDriverBleDiagnostic();
-      break;
     case SCREEN_RIDE_REPLAY:
       showRideReplay();
       break;
@@ -8531,20 +8229,18 @@ void uiShow(ScreenMode mode) {
 }
 
 #ifdef CYD_LVGL_PREVIEW
-void uiPreviewSetControllerBackend(ControllerType type, ControllerConnection connection) {
-  controllerType = type;
-  controllerConnection = type == CONTROLLER_FARDRIVER ? CONTROLLER_CONNECTION_BLE : connection;
+void uiPreviewSetControllerBackend(ControllerConnection connection) {
+  controllerConnection = connection;
 }
 
 void uiPreviewSetFirmwareUpdateUserMode(bool enabled) {
   firmwareUpdateUserMode = enabled;
 }
 
-void uiPreviewSetControllerSetup(uint8_t stage, ControllerType type, ControllerConnection connection) {
+void uiPreviewSetControllerSetup(uint8_t stage, ControllerConnection connection) {
   submenuType = SUBMENU_CONTROLLER_TYPE;
   controllerSetupStage = static_cast<ControllerSetupStage>(min<uint8_t>(stage, CONTROLLER_SETUP_CONFIRM));
-  pendingControllerType = type;
-  pendingControllerConnection = type == CONTROLLER_FARDRIVER ? CONTROLLER_CONNECTION_BLE : connection;
+  pendingControllerConnection = connection;
 }
 
 void uiPreviewSetSettingsCategory(uint8_t category) {

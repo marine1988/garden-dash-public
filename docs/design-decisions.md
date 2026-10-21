@@ -92,10 +92,9 @@ the old backend to hand back the single NimBLE client slot, then begins the new
 one. The setup wizard borrows the radio the same way, so scanning for a
 controller other than the running one works without a restart.
 
-**The test senders' encoders are independent of the firmware's decoders.** Two
-spare CYDs can impersonate a VESC or a FarDriver. The encoders were written
-separately on purpose, so the host tests that decode them are evidence rather
-than tautology. For the same reason the fixture CRCs in those tests are
+**The test sender's encoder is independent of the firmware's decoder.** A spare
+CYD can impersonate a VESC. The encoder was written separately on purpose, so
+the host tests that decode it are evidence rather than tautology. For the same reason the fixture CRCs in those tests are
 hand-computed constants: a CRC read back from the encoder under test proves
 nothing. Note that this makes the constants sensitive to fixture content — the
 VESC firmware-version CRC covers the device name, so renaming the fixture

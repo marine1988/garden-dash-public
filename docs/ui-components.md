@@ -222,9 +222,9 @@ layout editor's visual reference in the same change.
 
 ## Vehicle configuration
 
-Connection owns controller selection, pairing, UART baud, CAN target and link
-diagnostics. Configuration groups Power & Current, Ride Modes, Calibration and
-Gauge Ranges. Vehicle Info contains identity and continuous rated power. Battery
+Connection owns the VESC link (wired UART or Bluetooth), pairing, UART baud and
+CAN target. Configuration groups Calibration, Gauge Ranges, Profiles and Cruise.
+Vehicle Info contains identity and continuous rated power. Battery
 Configuration is a single page: a row of three tappable pack settings (chemistry,
 series count, capacity) above the nine read-only battery figures, all in 43 px
 tiles. The chemistry tile opens Cell Voltages, where Li-ion, LiPo and LiFePO4 are
@@ -241,24 +241,22 @@ change to chemistry or voltages restarts the charge estimate and the measured
 capacity, because both were derived from the old curve. Back returns to Battery
 Configuration. The series and capacity tiles open the keypad directly.
 
-Ride Modes uses the backend's `reportsRideMode` capability: FarDriver has a
-reported-gear page and a second page of display-only aliases. VESC explains that
-standard telemetry does not report a profile. Back traverses pages before
-returning to the parent; Next is absent on the final page. Field editors preserve
-the originating section and page. Use `makeMenuTopBar`, without extra arrows.
+Standard VESC telemetry does not report an active ride profile, so the
+Configuration hub no longer carries a Ride Modes page. Back traverses pages
+before returning to the parent; Next is absent on the final page. Field editors
+preserve the originating section and page. Use `makeMenuTopBar`, without extra
+arrows.
 
-Controller configuration writes are not implemented by any backend, so no card
-here claims to change the controller's own limits. Gauge ranges are explicitly
-local display scales, never controller limits. Power & Current was a dead end (a
-notice telling the rider to use VESC Tool), so it and the VESC-side Ride Modes
-card are gone: the Configuration hub offers only cards that do something. Future
-write support must use separate confirmed and pending settings, explicit
-application, and read-back verification. Do not connect the existing gauge-scale
-globals to controller configuration writes.
+Controller configuration writes beyond the confirmed profile apply are not
+implemented, so no card here claims to change arbitrary controller limits. Gauge
+ranges are explicitly local display scales, never controller limits. The
+Configuration hub offers only cards that do something. Future write support must
+use separate confirmed and pending settings, explicit application, and read-back
+verification. Do not connect the existing gauge-scale globals to controller
+configuration writes.
 
-Cruise Control and Profiles are the hub's other two cards
-(`controllerConfigSections` builds the list, so the screen and its handler cannot
-disagree). Ride Modes stays only on FarDriver, which reports gears.
+Calibration, Gauge Ranges, Profiles and Cruise are built by
+`controllerConfigSections`, so the screen and its handler cannot disagree.
 
 Cruise is offered only on a VESC link. It is entirely display-side and has no
 engage button: the telemetry task watches for a steady speed (within 2 km/h)
@@ -280,7 +278,7 @@ fields named, and never writes the controller's flash. The read-back uses
 `COMM_GET_MCCONF_TEMP`; the page's `CTRL` line shows the controller's values
 rather than the display's. Selecting a profile is not a write; only a confirmed
 APPLY is replayed after a reconnect. Native states `34_controller_hub`,
-`34_cruise_window`, `34_cruise_modes`, `34_profiles_slots`,
+`34_cruise_window`, `34_cruise_state`, `34_profiles_slots`,
 `34_profiles_limits` and `34_profiles_apply` cover them; check Finnish and
 German as usual.
 
@@ -421,9 +419,8 @@ same kind of amplitude as the PHASE A motor current (so P = 1.5 x V x A):
 `Vbus * abs(duty) / sqrt(3)`. This assumes sinusoidal VESC FOC and the default
 `foc_overmod_factor = 1`; it is not measured, is not valid for arbitrary motor
 control modes/modulation configurations, and cannot identify field weakening.
-It is marked derived in telemetry. FarDriver has no duty/phase-voltage reading,
-so the PHASE V and DUTY dials stay unavailable. A user-facing explanation is
-deferred.
+It is marked derived in telemetry. When a controller does not report duty or
+phase voltage, the PHASE V and DUTY dials stay unavailable.
 
 The instruments' widgets belong to the active Motor Data screen. A
 screen-owned delete callback clears the cached screen pointer so updates stop

@@ -77,7 +77,7 @@ void writeIdentity(bool notify) {
   payload[5] = kIdentityMessage;
   payload[6] = (controllerPaused ? 0x01 : 0) | (controllerUsesBluetooth() ? 0x02 : 0);
   payload[7] = static_cast<uint8_t>(displayPanelProfile);
-  payload[8] = static_cast<uint8_t>(controllerType);
+  payload[8] = 0;  // controller family: VESC (the only family this firmware drives)
   payload[9] = static_cast<uint8_t>(controllerConnection);
   const size_t nameLength = strnlen(vehicleName, sizeof(vehicleName));
   payload[10] = static_cast<uint8_t>(nameLength);

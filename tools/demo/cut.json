@@ -1,7 +1,7 @@
 {
   "intro": {
     "title": "A dashboard for electric vehicles",
-    "subtitle": "On the ESP32 Cheap Yellow Display. VESC or FarDriver, wired or Bluetooth.",
+    "subtitle": "On the ESP32 Cheap Yellow Display. VESC, wired or Bluetooth.",
     "mark": "Intro",
     "seconds": 4.5
   },

@@ -12,8 +12,7 @@ ControllerPollResult vescBackendPoll(ControllerSample &out);
 // and publishes the resulting state and outcome back for the UI to read.
 // A request is consumed once, so calling engage twice engages once.
 //
-// Only the VESC backends implement these; the FarDriver link has no equivalent
-// command, and controllerCapabilities().supportsCruiseControl is false there.
+// Only the VESC backends implement these.
 void vescCruiseRequestEngage();
 void vescCruiseRequestDisengage();
 // False when cruise is idle. `targetKmh` is written only while active.
@@ -36,8 +35,4 @@ VescProfileWriteReport vescProfileWriteReportGet();
 // Copies the last controller read-back under the same lock the telemetry task
 // writes it with. False when no valid reply has been seen for this link.
 bool vescProfileReadBackCopy(VescMcconfTemp &out);
-
-void farDriverBackendBegin();
-void farDriverBackendStop();
-ControllerPollResult farDriverBackendPoll(ControllerSample &out);
 

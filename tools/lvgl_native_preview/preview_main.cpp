@@ -268,13 +268,6 @@ int main(int argc, char **argv) {
       uiPreviewSetSettingsCategory(3); uiShow(SCREEN_MENU);
       capture(output, "11_developer_options"); if (stopAfterSelected()) return 0;
     }
-    if (selected("11_developer_options_fardriver")) {
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-      uiPreviewSetSettingsCategory(3); uiShow(SCREEN_MENU);
-      capture(output, "11_developer_options_fardriver");
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
-      if (stopAfterSelected()) return 0;
-    }
     if (selected("11_developer_disable_prompt")) {
       uiPreviewSetSettingsCategory(3); uiShow(SCREEN_MENU);
       uiPreviewShowDeveloperDisablePrompt();
@@ -345,56 +338,29 @@ int main(int argc, char **argv) {
       uiPreviewSetSettingsCategory(2); uiShow(SCREEN_MENU);
       capture(output, "11_controller_settings"); if (stopAfterSelected()) return 0;
     }
-    if (selected("11_controller_settings_fardriver")) {
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-      uiPreviewSetSettingsCategory(2); uiShow(SCREEN_MENU);
-      capture(output, "11_controller_settings_fardriver");
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
-      if (stopAfterSelected()) return 0;
-    }
     if (selected("11_controller_setup")) {
       uiPreviewSetControllerSetup(0); uiShow(SCREEN_SUBMENU);
       capture(output, "11_controller_setup"); if (stopAfterSelected()) return 0;
     }
-    if (selected("11_controller_setup_connection")) {
-      uiPreviewSetControllerSetup(1); uiShow(SCREEN_SUBMENU);
-      capture(output, "11_controller_setup_connection"); if (stopAfterSelected()) return 0;
-    }
     if (selected("11_controller_setup_discovery")) {
-      uiPreviewSetControllerSetup(2, CONTROLLER_VESC, CONTROLLER_CONNECTION_BLE); uiShow(SCREEN_SUBMENU);
+      uiPreviewSetControllerSetup(1, CONTROLLER_CONNECTION_BLE); uiShow(SCREEN_SUBMENU);
       capture(output, "11_controller_setup_discovery"); if (stopAfterSelected()) return 0;
     }
     if (selected("11_controller_setup_confirm")) {
-      uiPreviewSetControllerSetup(3, CONTROLLER_VESC, CONTROLLER_CONNECTION_UART); uiShow(SCREEN_SUBMENU);
+      uiPreviewSetControllerSetup(2, CONTROLLER_CONNECTION_UART); uiShow(SCREEN_SUBMENU);
       capture(output, "11_controller_setup_confirm"); if (stopAfterSelected()) return 0;
     }
-    if (selected("11_controller_setup_fardriver_connected")) {
-      uiPreviewSetControllerSetup(2, CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE); uiShow(SCREEN_SUBMENU);
-      capture(output, "11_controller_setup_fardriver_connected"); if (stopAfterSelected()) return 0;
-    }
-    if (selected("11_controller_setup_fardriver_confirm")) {
-      uiPreviewSetControllerSetup(3, CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE); uiShow(SCREEN_SUBMENU);
-      capture(output, "11_controller_setup_fardriver_confirm"); if (stopAfterSelected()) return 0;
-    }
-
     if (selected("19_controller_config_uart")) {
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
       showSubmenu(output, SUBMENU_CONTROLLER_CONFIG, 0, false, "19_controller_config_uart");
       if (stopAfterSelected()) return 0;
     }
     if (selected("19_controller_config_ble")) {
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_BLE);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
       showSubmenu(output, SUBMENU_CONTROLLER_CONFIG, 0, false, "19_controller_config_ble");
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
       if (stopAfterSelected()) return 0;
     }
-    if (selected("19_controller_config_fardriver")) {
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-      showSubmenu(output, SUBMENU_CONTROLLER_CONFIG, 0, false, "19_controller_config_fardriver");
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
-      if (stopAfterSelected()) return 0;
-    }
-
     if (selected("12_gradient_example")) {
       uiPreviewSetGradient(true, false, true, 42);
       showDashboard(output, MODE_LARGE_TILES, "12_gradient_example");
@@ -448,22 +414,6 @@ int main(int argc, char **argv) {
       if (state.blinkMs) cyd::preview::advanceTime(state.blinkMs);
       capture(output, state.name);
       dashboardAppearanceMode = appearance;
-      if (stopAfterSelected()) return 0;
-    }
-    if (selected("13_dashboard_fardriver_fields")) {
-      const TelemetryFieldMask available =
-          TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_POWER | TELEMETRY_FIELD_VOLTAGE |
-          TELEMETRY_FIELD_CURRENT | TELEMETRY_FIELD_MOTOR_TEMP | TELEMETRY_FIELD_ESC_TEMP |
-          TELEMETRY_FIELD_TRIP_DISTANCE | TELEMETRY_FIELD_AVG_SPEED | TELEMETRY_FIELD_UPTIME |
-          TELEMETRY_FIELD_BATTERY_SOC | TELEMETRY_FIELD_RIDE_MODE;
-      const TelemetryFieldMask derived =
-          TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_POWER | TELEMETRY_FIELD_TRIP_DISTANCE |
-          TELEMETRY_FIELD_AVG_SPEED | TELEMETRY_FIELD_UPTIME;
-      previewSetControllerTelemetryFields(available, derived);
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-      showDashboard(output, MODE_SIMPLE, "13_dashboard_fardriver_fields");
-      previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL);
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
       if (stopAfterSelected()) return 0;
     }
     if (selected("13_dashboard_logging_on")) {
@@ -578,33 +528,16 @@ int main(int argc, char **argv) {
     const VehiclePreview vehiclePreviews[] = {
       {"20_connection_uart", SUBMENU_CONNECTION, 0, CONTROLLER_ID_VESC_UART},
       {"20_connection_ble", SUBMENU_CONNECTION, 0, CONTROLLER_ID_VESC_BLE},
-      {"20_connection_fardriver", SUBMENU_CONNECTION, 0, CONTROLLER_ID_FARDRIVER_BLE},
-      {"21_calibration", SUBMENU_SPEED_CALIBRATION, 0, CONTROLLER_ID_FARDRIVER_BLE},
+      {"21_calibration", SUBMENU_SPEED_CALIBRATION, 0, CONTROLLER_ID_VESC_UART},
       {"21_gauge_ranges", SUBMENU_GAUGE_RANGES, 0, CONTROLLER_ID_VESC_UART},
-      {"22_modes_vesc", SUBMENU_SPEED, 0, CONTROLLER_ID_VESC_UART},
-      {"22_modes_fardriver", SUBMENU_SPEED, 0, CONTROLLER_ID_FARDRIVER_BLE},
-      {"23_mode_labels", SUBMENU_SPEED, 1, CONTROLLER_ID_FARDRIVER_BLE},
     };
     for (const auto &state : vehiclePreviews) {
       if (!selected(state.name)) continue;
-      controllerSelectionForId(state.backend, controllerType, controllerConnection);
+      controllerConnection = controllerConnectionForId(state.backend);
       showSubmenu(output, state.type, state.page, false, state.name);
       if (stopAfterSelected()) return 0;
     }
-    controllerType = CONTROLLER_VESC;
     controllerConnection = CONTROLLER_CONNECTION_UART;
-    if (selected("23_dashboard_ride_mode")) {
-      controllerType = CONTROLLER_FARDRIVER;
-      controllerConnection = CONTROLLER_CONNECTION_BLE;
-      snprintf(rideModeLabels[1], sizeof(rideModeLabels[1]), "Drive");
-      setDashboardDataSelection(MODE_HUD, 0, DATA_RIDE_MODE);
-      showDashboard(output, MODE_HUD, "23_dashboard_ride_mode");
-      rideModeLabels[1][0] = '\0';
-      setDashboardDataSelection(MODE_HUD, 0, dashboardDataDefault(MODE_HUD, 0));
-      controllerType = CONTROLLER_VESC;
-      controllerConnection = CONTROLLER_CONNECTION_UART;
-      if (stopAfterSelected()) return 0;
-    }
     if (selected("24_display_submenu")) { showSubmenu(output, SUBMENU_DISPLAY, 0, false, "24_display_submenu"); if (stopAfterSelected()) return 0; }
     if (selected("24_display_submenu_auto")) {
       autoBrightnessEnabled = true;
@@ -651,7 +584,6 @@ int main(int argc, char **argv) {
     if (selected("24_display_panel")) { showSubmenu(output, SUBMENU_PANEL_COLORS, 0, false, "24_display_panel"); if (stopAfterSelected()) return 0; }
     if (selected("24_display_panel_gamma")) { showSubmenu(output, SUBMENU_PANEL_COLORS, 1, false, "24_display_panel_gamma"); if (stopAfterSelected()) return 0; }
     if (selected("24_auto_return")) { showSubmenu(output, SUBMENU_AUTO_RETURN, 0, false, "24_auto_return"); if (stopAfterSelected()) return 0; }
-    if (selected("24_fardriver_ble")) { uiShow(SCREEN_FARDRIVER_BLE); capture(output, "24_fardriver_ble"); if (stopAfterSelected()) return 0; }
     if (selected("24_firmware_update_locked")) {
       previewSetFirmwareUpdateState(FIRMWARE_UPDATE_BLE_LOCKED, false, 0, 0, "Release signing key not configured");
       uiShow(SCREEN_FIRMWARE_UPDATE); capture(output, "24_firmware_update_locked"); if (stopAfterSelected()) return 0;
@@ -878,8 +810,8 @@ int main(int argc, char **argv) {
       showSubmenu(output, SUBMENU_CRUISE, 0, false, "34_cruise_window");
       if (stopAfterSelected()) return 0;
     }
-    if (selected("34_cruise_modes")) {
-      showSubmenu(output, SUBMENU_CRUISE, 1, false, "34_cruise_modes");
+    if (selected("34_cruise_state")) {
+      showSubmenu(output, SUBMENU_CRUISE, 1, false, "34_cruise_state");
       if (stopAfterSelected()) return 0;
     }
     if (selected("34_profiles_slots")) {
@@ -972,15 +904,15 @@ int main(int argc, char **argv) {
     // A Bluetooth controller with the radio switched off: the Connection page
     // shows the switch off, and the dashboard names where to turn it back on.
     if (selected("20_connection_bluetooth_off")) {
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
       bluetoothEnabled = false;
       showSubmenu(output, SUBMENU_CONNECTION, 0, false, "20_connection_bluetooth_off");
       bluetoothEnabled = true;
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
       if (stopAfterSelected()) return 0;
     }
     if (selected("36_bluetooth_off")) {
-      uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
       bluetoothEnabled = false;
       controllerEverConnected = true;
       previewSetTelemetryLink(LINK_LOST);
@@ -988,7 +920,7 @@ int main(int argc, char **argv) {
       showDashboard(output, MODE_BIG_READOUT, "36_bluetooth_off");
       previewSetTelemetryLink(LINK_LIVE);
       bluetoothEnabled = true;
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
       if (stopAfterSelected()) return 0;
     }
 
@@ -1015,11 +947,11 @@ int main(int argc, char **argv) {
     // First boot on a Bluetooth controller: nothing is paired, so the display
     // asks for pairing at once instead of waiting for a link that cannot come.
     if (selected("36_no_controller")) {
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_BLE);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
       previewSetTelemetryLink(LINK_WAITING);
       showDashboard(output, MODE_BIG_READOUT, "36_no_controller");
       previewSetTelemetryLink(LINK_LIVE);
-      uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+      uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
       if (stopAfterSelected()) return 0;
     }
 

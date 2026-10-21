@@ -66,7 +66,7 @@ ctest --test-dir tools/lvgl_native_preview/build_simulator -C Release --output-o
 | `cyd_gauge_ranges` | automatic gauge-range learning |
 | `cyd_demo_ride` | demo-mode ride generation |
 | `cyd_vehicle_fields` | vehicle configuration fields |
-| `cyd_vesc_protocol`, `cyd_vesc_sender`, `cyd_fardriver_sender` | wire protocols and the fake senders |
+| `cyd_vesc_protocol`, `cyd_vesc_sender` | wire protocol and the fake VESC sender |
 | `cyd_preferences` | host persistence, including save/reload across runs |
 | `cyd_demo_scene_*`, `cyd_demo_recorder_*` | every committed demo-video chapter plays to the end, the recorder renders a scene identically twice, and it names the failures it must (see [demo-video.md](demo-video.md)) |
 
@@ -91,7 +91,7 @@ videos. Nothing follows the wall clock, so a script renders identically each tim
 | XPT2046 touch | Mouse or deterministic pointer state in calibrated screen coordinates | Input callbacks are real; raw ADC values, calibration quality, jitter, pressure, and IRQ behavior are not simulated. |
 | `millis()` | Controlled host counter | Timer ordering is deterministic; ESP32 scheduling latency and clock drift are not simulated. |
 | Preferences/NVS | Versioned binary file or in-memory store | Application save/reload behavior is covered; flash wear, write latency, corruption, partition exhaustion, and NVS internals are not simulated. |
-| VESC/FarDriver links | Semantic status and representative telemetry fixtures | UI reactions are covered; UART framing, BLE discovery/radio timing, packet loss, and controller compatibility are not simulated. |
+| VESC links | Semantic status and representative telemetry fixtures | UI reactions are covered; UART framing, BLE discovery/radio timing, packet loss, and controller compatibility are not simulated. |
 | SD ride logging | Semantic logger/card/catalog fixtures | UI reactions are covered; filesystem, SPI sharing, card latency, removal during writes, and media corruption require hardware tests. |
 | Firmware update | Semantic transfer/status fixtures | Screens and state delivery are covered; BLE transport, signature/OTA partition writes, rollback, and reboot validation require target tests. |
 | LDR, backlight, RGB LED | Representative sensor values and no-op output functions | UI and settings are covered; ADC response, PWM, LED polarity, and brightness are not simulated. The demo-video recorder draws the brightness setting as an effect on the picture only ([demo-video.md](demo-video.md)). |

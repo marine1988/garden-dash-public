@@ -18,7 +18,7 @@ VescBleStatus state = {};
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 QueueHandle_t queueHandle = nullptr;
 NimBLEClient *client = nullptr;
-// NimBLE is built with a single client slot, so the FarDriver backend cannot
+// NimBLE is built with a single client slot, so another Bluetooth role cannot
 // create its own until this one hands the slot back. Released means "no client
 // object exists here", which is the state a fresh boot starts in.
 volatile bool bleRadioReleased = true;
@@ -119,7 +119,7 @@ void connectTo(const VescBleDeviceInfo &device) {
   setState(VESC_BLE_CONNECTING, "Connecting to VESC...");
   if (!client) {
     client = NimBLEDevice::createClient();
-    // The FarDriver backend may still hold the single client slot.
+    // Another Bluetooth role may still hold the single client slot.
     if (!client) { setState(VESC_BLE_ERROR, "Bluetooth radio busy; try again"); return; }
     bleRadioReleased = false;
     client->setClientCallbacks(&clientCallbacks, false);

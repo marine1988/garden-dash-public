@@ -55,8 +55,8 @@ rem heading (#), or "key|label|description".
 set MENU_ENTRIES="=Garden-Dash %FW_NAME% in development   (version code %FW_CODE%)" "=Last release: %LAST_RELEASE%"
 set MENU_ENTRIES=%MENU_ENTRIES% "#Build and run" "1|Simulator|interactive virtual display" "2|Preview renders|regenerate preview_output\lvgl" "3|Layout editor|edit tools\layout.json"
 set MENU_ENTRIES=%MENU_ENTRIES% "#Firmware" "4|Flash over USB|build and install on a connected display" "5|Package firmware|test package, or a release to publish" "6|Install package|signed test package or release, by USB or Bluetooth"
-set MENU_ENTRIES=%MENU_ENTRIES% "#Test senders" "7|Fake VESC|flash a second board as a VESC" "8|Fake FarDriver|flash a second board as a FarDriver"
-if exist "%APP_HOOK%" set MENU_ENTRIES=%MENU_ENTRIES% "#Companion app" "9|Install on phone|build the APK and adb install it"
+set MENU_ENTRIES=%MENU_ENTRIES% "#Test senders" "7|Fake VESC|flash a second board as a VESC"
+if exist "%APP_HOOK%" set MENU_ENTRIES=%MENU_ENTRIES% "#Companion app" "8|Install on phone|build the APK and adb install it"
 
 rem The arrow-key menu reports 100 + the chosen number, or 110 to quit. Any other
 rem result means PowerShell could not run it, so fall back to a numbered prompt.
@@ -64,7 +64,7 @@ set "MENU_KEY="
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPTS%\menu.ps1" -Selected "%LAST_KEY%" -HelpFile "%SCRIPTS%\menu_help.txt" %MENU_ENTRIES%
 set "MENU_RESULT=%errorlevel%"
 if "%MENU_RESULT%"=="110" goto quit
-if %MENU_RESULT% GEQ 101 if %MENU_RESULT% LEQ 109 set /a "MENU_KEY=MENU_RESULT-100"
+if %MENU_RESULT% GEQ 101 if %MENU_RESULT% LEQ 108 set /a "MENU_KEY=MENU_RESULT-100"
 if not defined MENU_KEY call :plain_menu %MENU_ENTRIES%
 if not defined MENU_KEY goto quit
 rem The cursor starts on the last choice when the menu comes back.
@@ -77,8 +77,7 @@ if "%MENU_KEY%"=="4" call :run "%SCRIPTS%\upload_firmware_usb.bat"
 if "%MENU_KEY%"=="5" call :run "%SCRIPTS%\make_release.bat"
 if "%MENU_KEY%"=="6" call :menu_install
 if "%MENU_KEY%"=="7" call :run "%SCRIPTS%\upload_vesc_test.bat"
-if "%MENU_KEY%"=="8" call :run "%SCRIPTS%\upload_fardriver_test.bat"
-if "%MENU_KEY%"=="9" if exist "%APP_HOOK%" call :run "%APP_HOOK%"
+if "%MENU_KEY%"=="8" if exist "%APP_HOOK%" call :run "%APP_HOOK%"
 goto menu
 
 rem Option 6: install the signed package of the version in config.h, over

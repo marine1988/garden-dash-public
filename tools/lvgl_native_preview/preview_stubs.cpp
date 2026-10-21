@@ -1,5 +1,4 @@
 #include "app_state.h"
-#include "fardriver_ble.h"
 #include "firmware_update_ble.h"
 #include "companion_ble.h"
 #include "Preferences.h"
@@ -113,61 +112,6 @@ void previewSetCompanionState(CompanionBleState state, bool paused, uint32_t sec
   previewCompanion.secondsRemaining = seconds;
   previewCompanion.revision++;
   snprintf(previewCompanion.message, sizeof(previewCompanion.message), "%s", message);
-}
-
-void farDriverBleBegin() {}
-void farDriverBleStartScan() {}
-void farDriverBleConnect(uint8_t) {}
-void farDriverBleReconnectSaved() {}
-void farDriverBleDisconnect() {}
-void farDriverBleForget() {}
-void farDriverBleReleaseRadio() {}
-bool farDriverBleRadioReleased() { return true; }
-void farDriverBleResetSettings() {
-  Preferences preferences;
-  preferences.begin("fardriver", false);
-  preferences.clear();
-  preferences.end();
-}
-FarDriverTelemetry farDriverTelemetry() {
-  FarDriverTelemetry telemetry = {};
-  return telemetry;
-}
-
-static uint32_t previewFarDriverRevision = 1;
-static uint32_t previewFarDriverLinkRevision = 1;
-static bool previewFarDriverConnected = true;
-void previewFarDriverReceivePacket() { previewFarDriverRevision++; }
-void previewSetFarDriverConnected(bool connected) {
-  previewFarDriverConnected = connected;
-  previewFarDriverLinkRevision++;
-  previewFarDriverRevision++;
-}
-
-FarDriverBleStatus farDriverBleStatus() {
-  FarDriverBleStatus status = {};
-  status.state = previewFarDriverConnected ? FARDRIVER_BLE_CONNECTED : FARDRIVER_BLE_IDLE;
-  status.deviceCount = 1;
-  snprintf(status.devices[0].name, sizeof(status.devices[0].name), "FarDriver TEST");
-  snprintf(status.devices[0].address, sizeof(status.devices[0].address), "A4:C1:38:72:19:EF");
-  status.devices[0].rssi = -48;
-  status.devices[0].likelyFarDriver = true;
-  status.savedDevice = true;
-  snprintf(status.savedAddress, sizeof(status.savedAddress), "A4:C1:38:72:19:EF");
-  snprintf(status.connectedAddress, sizeof(status.connectedAddress), "A4:C1:38:72:19:EF");
-  snprintf(status.serviceUuid, sizeof(status.serviceUuid), "0000ffe0-0000-1000-8000-00805f9b34fb");
-  snprintf(status.characteristicUuid, sizeof(status.characteristicUuid), "0000ffec-0000-1000-8000-00805f9b34fb");
-  snprintf(status.lastPacketHex, sizeof(status.lastPacketHex), "AA 82 03 00 00 00 00 00 7D 00 00 00 00 00 D9 1D");
-  snprintf(status.message, sizeof(status.message), "Connected - notifications active");
-  status.frameCount = 1841 + previewFarDriverRevision;
-  status.crcFailCount = 0;
-  status.discardedBytes = 0;
-  status.lastPacketLength = 16;
-  status.lastFrameId = 0x03;
-  status.connectedRssi = -48;
-  status.linkRevision = previewFarDriverLinkRevision;
-  status.revision = previewFarDriverRevision;
-  return status;
 }
 
 VescBleStream vescBleStream;
@@ -402,17 +346,10 @@ uint8_t telemetryFaultCode() {
   return previewLink == LINK_LIVE ? previewFault : 0;
 }
 
-// The renderer captures the controller-supplied-speed case, since that is the
-// one the swapped setup field exists for.
-// The preview fakes every other reading, so it fakes a reported gear too;
-// otherwise the mode cell would render as a dash in every captured sheet.
-uint8_t telemetryRideMode() {
-  return previewLink == LINK_LIVE && controllerType == CONTROLLER_FARDRIVER ? 2 : 0;
-}
+// Standard VESC telemetry does not report an active ride profile.
+uint8_t telemetryRideMode() { return 0; }
 
-bool telemetrySpeedFromController() {
-  return previewLink == LINK_LIVE && controllerType != CONTROLLER_FARDRIVER;
-}
+
 
 // A representative version so the VESC page shows the detected-firmware case
 // rather than the never-answered one.

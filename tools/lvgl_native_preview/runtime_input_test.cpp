@@ -19,8 +19,6 @@ extern void previewSetWipeStatus(RideLogWipeStatus::State state, uint32_t remove
 extern void previewSetInteractiveMode(bool enabled);
 extern void previewSetLightSensor(int raw, int targetPercent);
 extern void previewSetFirmwareUpdateActive(bool active);
-extern void previewFarDriverReceivePacket();
-extern void previewSetFarDriverConnected(bool connected);
 extern void previewSetFirmwareUpdateState(FirmwareUpdateBleState state, bool configured, uint32_t received,
                                           uint32_t total, const char *message);
 
@@ -109,24 +107,19 @@ int main() {
   loadAppSettings();
 
   // Backend ids are persisted, so registry order must not influence selection.
-  ControllerType selectedType = CONTROLLER_VESC;
-  ControllerConnection selectedConnection = CONTROLLER_CONNECTION_UART;
-  controllerSelectionForId(CONTROLLER_ID_FARDRIVER_BLE, selectedType, selectedConnection);
-  if (!expect(selectedType == CONTROLLER_FARDRIVER && selectedConnection == CONTROLLER_CONNECTION_BLE,
-              "stable FarDriver backend id did not restore its selection") ||
-      !expect(controllerBackendIdFor(selectedType, selectedConnection) == CONTROLLER_ID_FARDRIVER_BLE,
+  ControllerConnection selectedConnection = controllerConnectionForId(CONTROLLER_ID_VESC_BLE);
+  if (!expect(selectedConnection == CONTROLLER_CONNECTION_BLE,
+              "VESC BLE backend id did not restore its connection") ||
+      !expect(controllerBackendIdFor(selectedConnection) == CONTROLLER_ID_VESC_BLE,
               "controller selection did not round-trip through the stable id"))
     return 1;
-  controllerType = CONTROLLER_FARDRIVER;
   controllerConnection = CONTROLLER_CONNECTION_BLE;
   saveAppSettings();
-  controllerType = CONTROLLER_VESC;
   controllerConnection = CONTROLLER_CONNECTION_UART;
   loadAppSettings();
-  if (!expect(controllerType == CONTROLLER_FARDRIVER && controllerConnection == CONTROLLER_CONNECTION_BLE,
+  if (!expect(controllerConnection == CONTROLLER_CONNECTION_BLE,
               "stable backend id did not survive an application-settings reload"))
     return 1;
-  controllerType = CONTROLLER_VESC;
   controllerConnection = CONTROLLER_CONNECTION_UART;
   previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL & ~TELEMETRY_FIELD_ODOMETER,
                                       TELEMETRY_FIELDS_ALL & ~TELEMETRY_FIELD_ODOMETER);
@@ -215,45 +208,27 @@ int main() {
     return 1;
   }
 
-  // Simulate continuous FarDriver packet updates while discovery is visible.
-  // Deleting its controls resets touch input and can swallow Continue presses.
+  // Controller setup asks only how the VESC is connected. The BLE discovery
+  // page still lists and ranks devices; the wired path goes straight to its
+  // confirmation.
   previewSetFirmwareUpdateActive(false);
-  uiPreviewSetControllerSetup(2, CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
+  language = LANG_EN;
+  uiPreviewSetControllerSetup(1, CONTROLLER_CONNECTION_BLE);
   uiShow(SCREEN_SUBMENU);
-  uiDashboardTick();
   cyd::preview::advanceTime(200);
-  bool discoveryDeleted = false;
-  lv_obj_add_event_cb(lv_obj_get_child(lv_scr_act(), 0), [](lv_event_t *event) {
-    *static_cast<bool *>(lv_event_get_user_data(event)) = true;
-  }, LV_EVENT_DELETE, &discoveryDeleted);
-  for (int i = 0; i < 100; i++) {
-    previewFarDriverReceivePacket();
-    uiDashboardTick();
-    cyd::preview::advanceTime(100);
-    if (!expect(!discoveryDeleted, "FarDriver packet rebuilt discovery and interrupted input")) return 1;
-  }
-  tap(220, 216);
-  cyd::preview::advanceTime(200);
-  if (!expect(hasLabel(lv_scr_act(), "APPLY CONTROLLER SETUP?"), "Continue did not open setup confirmation"))
+  if (!expect(hasLabel(lv_scr_act(), "VESC Express"), "BLE discovery has no VESC candidate") ||
+      !expect(hasLabel(lv_scr_act(), "SCAN AGAIN"), "BLE discovery has no scan control"))
     return 1;
-  uiPreviewSetControllerSetup(2, CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
+  uiPreviewSetControllerSetup(0, CONTROLLER_CONNECTION_UART);
   uiShow(SCREEN_SUBMENU);
-  previewSetFarDriverConnected(false);
-  uiDashboardTick();
   cyd::preview::advanceTime(200);
-  if (!expect(!hasLabel(lv_scr_act(), "CONTINUE >"), "Disconnect left Continue available")) return 1;
-  previewSetFarDriverConnected(true);
-  uiDashboardTick();
+  if (!expect(hasLabel(lv_scr_act(), "HOW IS THE VESC CONNECTED?"), "setup did not ask for the connection"))
+    return 1;
+  if (!expect(tapLabel("WIRED UART"), "setup has no wired option")) return 1;
   cyd::preview::advanceTime(200);
-  if (!expect(hasLabel(lv_scr_act(), "CONTINUE >"), "Reconnect did not restore Continue")) return 1;
-
-  // Applying the setup ends the wizard: it says what happened and hands the
-  // display back, rather than dropping the rider in the settings menu with no
-  // sign that anything took.
-  uiPreviewSetControllerSetup(3, CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-  uiShow(SCREEN_SUBMENU);
-  cyd::preview::advanceTime(500);
-  if (!expect(tapLabel("APPLY"), "setup confirmation has no Apply")) return 1;
+  if (!expect(hasLabel(lv_scr_act(), "ENABLE WIRED VESC?"), "wired setup did not open its confirmation"))
+    return 1;
+  if (!expect(tapLabel("CONFIRM"), "wired confirmation has no Confirm")) return 1;
   cyd::preview::advanceTime(500);
   if (!expectScreen(SCREEN_DASHBOARD, "applying the controller setup") ||
       !expect(hasLabel(lv_scr_act(), "CONTROLLER SETUP SAVED"), "Apply gave no confirmation"))
@@ -272,10 +247,6 @@ int main() {
   vescPair.begin("vescBle", false);
   vescPair.putString("addr", "C4:7C:8D:21:40:9A");
   vescPair.end();
-  Preferences farDriverPair;
-  farDriverPair.begin("fardriver", false);
-  farDriverPair.putString("addr", "A4:C1:38:72:19:EF");
-  farDriverPair.end();
   Preferences battery;
   battery.begin("batt", false);
   battery.putUInt("reset-test", 73);
@@ -291,9 +262,6 @@ int main() {
   vescPair.begin("vescBle", true);
   if (!expect(!vescPair.isKey("addr"), "normal reset kept the VESC BLE pairing")) return 1;
   vescPair.end();
-  farDriverPair.begin("fardriver", true);
-  if (!expect(!farDriverPair.isKey("addr"), "normal reset kept the FarDriver BLE pairing")) return 1;
-  farDriverPair.end();
   battery.begin("batt", true);
   if (!expect(battery.getUInt("reset-test", 0) == 73, "normal reset cleared battery history")) return 1;
   battery.end();
@@ -320,24 +288,14 @@ int main() {
 
   // Exercise the actual Back/Next and editor return paths in the vehicle menus.
   language = LANG_EN;
-  controllerType = CONTROLLER_FARDRIVER;
-  controllerConnection = CONTROLLER_CONNECTION_BLE;
+  controllerConnection = CONTROLLER_CONNECTION_UART;
   uiPreviewSetSubmenu(SUBMENU_CONTROLLER_CONFIG, 0, false);
   uiShow(SCREEN_SUBMENU);
-  // The hub builds its cards from controllerConfigSections(): FarDriver leads
-  // with Ride Modes, so it is the first card (left column, top row).
+  // The hub's first card is wheel and road speed. Ride modes are not part of
+  // a VESC-only configuration hub.
   tap(70, 90);
-  if (!expect(submenuType == SUBMENU_SPEED, "Ride Modes tile did not open modes")) return 1;
-  tap(275, 22);
-  if (!expect(hasLabel(lv_scr_act(), "Low gear label"), "Next did not open gear labels") ||
-      !expect(!hasLabel(lv_scr_act(), "NEXT >"), "final mode page still has Next")) return 1;
-  tap(70, 90);
-  if (!expectScreen(SCREEN_TEXT_INPUT, "mode label editor")) return 1;
-  tap(40, 22);
-  if (!expectScreen(SCREEN_SUBMENU, "cancel label editor") ||
-      !expect(hasLabel(lv_scr_act(), "Low gear label"), "editor lost mode page")) return 1;
-  tap(40, 22);
-  if (!expect(hasLabel(lv_scr_act(), "REPORTED GEAR"), "Back skipped previous mode page")) return 1;
+  if (!expect(submenuType == SUBMENU_SPEED_CALIBRATION, "first configuration card did not open calibration"))
+    return 1;
   tap(40, 22);
   if (!expect(submenuType == SUBMENU_CONTROLLER_CONFIG, "Back did not return to configuration")) return 1;
 
@@ -346,7 +304,7 @@ int main() {
   // dashboard badge follows, and a reset restores usable defaults. The write path
   // needs a live controller link, so the host preview exercises the capability
   // gate only.
-  uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
   resetControllerProfile(0);
   activeControllerProfile = 0xFF;
   appliedControllerProfile = 0xFF;
@@ -400,10 +358,7 @@ int main() {
   if (!expect(controllerProfileWriteReport().status == VESC_PROFILE_WRITE_IDLE,
               "the host preview write is a no-op and reports idle"))
     return 1;
-  uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER, CONTROLLER_CONNECTION_BLE);
-  if (!expect(!controllerSupportsProfileWrite(), "the FarDriver link does not write profiles"))
-    return 1;
-  uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
 
   // The profile pages: pick a slot, edit a limit through the shared editor, and
   // check that APPLY raises a confirmation dialog rather than writing to the
@@ -474,7 +429,7 @@ int main() {
   if (!expect(!hasLabel(lv_scr_act(), vehicleFieldTitle(VEHICLE_FIELD_VESC_BAUD)), "BLE displayed a UART baud editor")) return 1;
 
   // Battery-specific options must not intercept the shared settings editors.
-  uiPreviewSetControllerBackend(CONTROLLER_VESC, CONTROLLER_CONNECTION_UART);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
   automaticGaugeRanges = false;
   if (!checkFieldEditor(SUBMENU_CONNECTION, VEHICLE_FIELD_VESC_BAUD) ||
       !checkFieldEditor(SUBMENU_VESC, VEHICLE_FIELD_NAME) ||
@@ -768,7 +723,7 @@ int main() {
   // With a Bluetooth controller selected and none paired, the home screen
   // alert is itself the shortcut into controller setup.
   if(!expect(!pinEnabled,"the alert shortcut test expects no PIN"))return 1;
-  uiPreviewSetControllerBackend(CONTROLLER_VESC,CONTROLLER_CONNECTION_BLE);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
   previewSetTelemetryLink(LINK_WAITING);
   uiShow(SCREEN_DASHBOARD);cyd::preview::advanceTime(200);
   if(!expect(hasLabel(lv_scr_act(),"NO CONTROLLER PAIRED"),"unpaired alert did not show at once"))return 1;
@@ -776,7 +731,7 @@ int main() {
   if(!expectScreen(SCREEN_SUBMENU,"tapping the unpaired alert") ||
      !expect(hasLabel(lv_scr_act(),"CONTROLLER SETUP"),"the alert did not open controller setup"))return 1;
   previewSetTelemetryLink(LINK_LIVE);
-  uiPreviewSetControllerBackend(CONTROLLER_VESC,CONTROLLER_CONNECTION_UART);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
   uiShow(SCREEN_DASHBOARD);cyd::preview::advanceTime(200);
 
   // After a reset the default wired VESC has nothing to pair, but nothing has
@@ -813,7 +768,7 @@ int main() {
   uiPreviewSetSubmenu(SUBMENU_CONNECTION);
   uiShow(SCREEN_SUBMENU);cyd::preview::advanceTime(100);
   if(!expect(!hasLabel(lv_scr_act(),"BLUETOOTH"),"a wired controller offered the Bluetooth switch"))return 1;
-  uiPreviewSetControllerBackend(CONTROLLER_FARDRIVER,CONTROLLER_CONNECTION_BLE);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_BLE);
   uiShow(SCREEN_SUBMENU);cyd::preview::advanceTime(100);
   if(!expect(tapLabel("BLUETOOTH") && !bluetoothEnabled,"the Bluetooth switch did not turn Bluetooth off"))return 1;
   previewSetTelemetryLink(LINK_LOST);
@@ -823,7 +778,7 @@ int main() {
   uiShow(SCREEN_SUBMENU);cyd::preview::advanceTime(100);
   if(!expect(tapLabel("BLUETOOTH") && bluetoothEnabled,"the Bluetooth switch did not turn Bluetooth back on"))return 1;
   previewSetTelemetryLink(LINK_LIVE);
-  uiPreviewSetControllerBackend(CONTROLLER_VESC,CONTROLLER_CONNECTION_UART);
+  uiPreviewSetControllerBackend(CONTROLLER_CONNECTION_UART);
   uiShow(SCREEN_DASHBOARD);cyd::preview::advanceTime(200);
 
   std::cout << "shared pointer path opened settings and automatic user update mode; frame "

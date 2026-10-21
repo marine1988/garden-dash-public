@@ -103,15 +103,6 @@ and any failed step. Test both original and alternate CYD panels.
 - [ ] The cruise page shows state, hold time and how to cancel; page 1 still
       edits enable, hold time, min and max speed.
 
-### FarDriver BLE
-
-- [ ] Scan prioritizes likely FarDriver devices.
-- [ ] Pairing and saved-device reconnect work.
-- [ ] Link Diagnostics displays service/characteristic UUIDs, RSSI, raw packet
-      data, packet count, and CRC count.
-- [ ] Information reports the BLE transport as connected even while decoded
-      FarDriver telemetry is unavailable.
-
 ## Signed Bluetooth firmware update
 
 - [ ] Settings > Information is clearly itemized and Bluetooth Link is the only phone
@@ -122,7 +113,7 @@ and any failed step. Test both original and alternate CYD panels.
       connected phone or Windows uploader can request update mode. The display
       acknowledges the handoff, stops ride logging, releases any controller BLE
       link, and advertises OTA only while the update screen remains active.
-- [ ] UART, VESC BLE, and FarDriver BLE configurations all enter and leave
+- [ ] Both wired UART and VESC BLE configurations enter and leave
       update mode cleanly; Cancel & Restart restores the normal controller link.
 - [ ] Wrong-target, unconfirmed downgrade, modified-manifest, modified-image,
       and invalid-signature releases are rejected without selecting a new boot
@@ -184,7 +175,7 @@ and any failed step. Test both original and alternate CYD panels.
 ## Reset behavior
 
 - [ ] Default Reset restores display/vehicle/controller settings, removes saved
-      VESC and FarDriver BLE pairings, switches logging off, and restores the
+      VESC BLE pairing, switches logging off, and restores the
       sample rate to 5 Hz for when logging is enabled again.
 - [ ] Default Reset keeps existing SD-card ride files, their next ride number,
       and battery history.

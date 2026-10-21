@@ -38,8 +38,9 @@ class VescBleStream : public Stream {
   // currently holds. Does nothing when no VESC is saved.
   void reconnectSaved();
   void disconnectDevice();
-  // Hand the single NimBLE client slot back so the FarDriver backend can use
-  // it. Asynchronous, like every other command here: poll radioReleased().
+  // Hand the single NimBLE client slot back to the controller manager while
+  // switching transports. Asynchronous, like every other command here: poll
+  // radioReleased().
   void releaseRadio();
   bool radioReleased() const;
   void forgetDevice();

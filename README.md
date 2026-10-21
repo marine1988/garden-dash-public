@@ -5,7 +5,7 @@
 <p align="center">
   <b>Garden-Dash</b> is a 320x240 landscape dashboard for electric vehicles, built on the
   ESP32-2432S028R "Cheap Yellow Display".<br>
-  It shows live telemetry from a VESC or FarDriver motor controller, over a wire or Bluetooth.
+  It shows live telemetry from a VESC motor controller, over a wire or Bluetooth.
 </p>
 
 <p align="center">
@@ -140,11 +140,8 @@ settings screen, and the ride replay views.
 | --- | --- | --- |
 | VESC | UART (wired) | In testing |
 | VESC | Bluetooth LE | Working |
-| FarDriver | Bluetooth LE | Works in limited testing: connects, reads telemetry and records rides, but with no guarantees |
 
-[v0.01](https://github.com/evcollector/kajo-dash/releases/tag/v0.01) is the first release. FarDriver support has had only limited testing on a
-few controllers, so treat its readings as unverified until you have checked them
-against your own controller.
+[v0.01](https://github.com/evcollector/kajo-dash/releases/tag/v0.01) is the first release.
 
 ## How it is built
 
@@ -191,8 +188,7 @@ If you are unsure about the wiring, do not guess.
 
 - **Display:** Sunton ESP32-2432S028R ("CYD"), either panel revision. ESP32, 4 MB
   flash, no PSRAM.
-- **Controller:** a VESC-based controller (UART or Bluetooth), or a FarDriver
-  (Bluetooth).
+- **Controller:** a VESC-based controller (UART or Bluetooth).
 - **For a wired link:** four jumper wires (shielding might be useful on higher voltage systems) or a JST cable to the controller's COMM port.
 - **Optional:** a microSD card for ride logging. Can be anything, from a hundred MB and up.
 
@@ -308,7 +304,7 @@ is unambiguous, and a second hold confirms the settings reset.
 | [Development](docs/development.md) | Building, simulator, preview renderer, tests, releases |
 | [Firmware updates](tools/firmware_update/README.md) | Bluetooth uploader, signing, installing your own builds |
 | [Releases](RELEASES.md) | Every published firmware version, with its firmware SHA-256 |
-| [Test senders](docs/test-senders.md) | Flash a spare CYD as a fake VESC or FarDriver |
+| [Test senders](docs/test-senders.md) | Flash a spare CYD as a fake VESC |
 | [All docs](docs/README.md) | Protocols, formats, design contracts |
 
 ## Contributing
@@ -340,6 +336,6 @@ word for a glow or faint light -- and was renamed. It does not refer to any
 company or product with the same name, and the project is not affiliated with or
 endorsed by any of them.
 
-VESC is a trademark of Benjamin Vedder. FarDriver, ESP32, and other brand names
-belong to their owners and are used only to describe what this display
-connects to or runs on.
+VESC is a trademark of Benjamin Vedder. ESP32 and other brand names belong to
+their owners and are used only to describe what this display connects to or runs
+on.
