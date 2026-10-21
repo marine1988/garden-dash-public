@@ -18,3 +18,9 @@ Keep the table at the end of this file: the release builder appends to it.
 | Version | Code | Date | Firmware SHA-256 |
 | --- | --- | --- | --- |
 | 0.01 | 1 | 2026-10-07 | `d6375204728dc865df6c5901fb6d2feeb335b3fc27d88a64f673754ea4ad4373` |
+| 0.02 | 2 | 2026-10-21 | `a755c280d777d3f20cae2b48f15f3cb4fab43c861a695a82c6756689a9c640b2` |
+
+0.02 was tagged from the source checkout field-tested for profiles. The SHA above
+is the default `garden` firmware image. Its signed OTA bundle is still pending
+because the offline release key was not available on the build machine; the tag
+itself is the source/firmware checkpoint.
