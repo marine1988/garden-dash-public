@@ -1021,10 +1021,9 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     cruiseRuntime.rpmPerKmh = 0.0F;
     cruiseRequestPending = 0;
     portEXIT_CRITICAL(&cruiseMux);
-    // The VESC may still hold a native cruise latch from a display crash or a
-    // BLE drop. Clear it and reattach the ADC buttons before this session can
-    // engage anything.
-    vescQueueCruiseLisp(kCruiseLispRelease);
+    // Do not send a Lisp expression automatically on connection. It runs
+    // before the link has settled and some VESC BLE bridges drop the
+    // connection when an unsolicited Lisp command arrives during startup.
     // Re-apply the profile the rider actually applied on every reconnect. The
     // controller's limits live in RAM only (conf-set, no store), so a power
     // cycle or link drop wipes them. Selecting a slot in the menu is not an

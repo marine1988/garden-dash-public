@@ -22,7 +22,7 @@ languages is not worth hand-maintaining.
 
 ## 2026-10-22 — Keep the VESC link stable
 
-Long config exchanges are gone; the ADC cruise button is a one-time VESC Tool setting.
+No long config or startup Lisp; the ADC cruise button is a one-time VESC Tool setting.
 
 ## 2026-10-22 — Cruise waits for release
 
