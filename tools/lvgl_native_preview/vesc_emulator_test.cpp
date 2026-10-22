@@ -203,6 +203,7 @@ void testLongestProfileFits() {
 
 void testCruise() {
   fake_vesc::ControllerState controller;
+  controller.cruiseButtonEnabled = true;
 
   // 25 s into the ride sequence: the 8,400 eRPM peak. Engage must capture it.
   const fake_vesc::Sample engageSample = fake_vesc::rideSample(25000);
@@ -249,6 +250,19 @@ void testCruise() {
   const fake_vesc::Sample released = controller.applyCruise(later);
   expect(released.erpm == later.erpm, "release returns to the sequence eRPM");
   expect(released.speedMmPerS == later.speedMmPerS, "release returns to the sequence speed");
+}
+
+void testCruiseButtonDisabled() {
+  fake_vesc::ControllerState controller;
+  controller.cruiseButtonEnabled = false;
+  const fake_vesc::Sample engage = fake_vesc::rideSample(25000);
+  expect(std::strcmp(controller.applyLisp(kCruiseLispEngage, engage.erpm, engage.speedMmPerS), "OK") == 0,
+         "disabled cruise button still acknowledges the Lisp command");
+  expect(!controller.cruiseHeld, "disabled cruise button does not capture a hold");
+  const fake_vesc::Sample later = fake_vesc::rideSample(35000);
+  const fake_vesc::Sample held = controller.applyCruise(later);
+  expect(held.erpm == later.erpm && held.speedMmPerS == later.speedMmPerS,
+         "disabled cruise button lets the sequence continue");
 }
 
 void testInvalidExpressions() {
@@ -321,6 +335,7 @@ int main() {
   testLongestProfileFits();
   testCanForwardedProfile();
   testCruise();
+  testCruiseButtonDisabled();
   testInvalidExpressions();
   testSessionReset();
 

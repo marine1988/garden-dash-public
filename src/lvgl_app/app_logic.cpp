@@ -1202,6 +1202,29 @@ void resetBatteryStats() {
 
 // The charge estimate and the measured capacity both came from the old curve,
 // so the next resting reading seeds them again.
+void batteryAdoptPackConfig(uint8_t seriesCount, uint32_t capacityDeciAh, uint8_t vescBatteryType) {
+  if (seriesCount < 4 || seriesCount > 32) return;
+  if (capacityDeciAh < kBatteryCapacityMinDeciAh || capacityDeciAh > kBatteryCapacityMaxDeciAh) return;
+  BatteryLock lock;
+  batterySeriesCount = seriesCount;
+  batteryCapacityDeciAh = capacityDeciAh;
+  if (vescBatteryType == 0) {
+    batteryChemistry = BATTERY_LIION;
+  } else if (vescBatteryType == 1) {
+    batteryChemistry = BATTERY_LIFEPO4;
+  }
+  if (vescBatteryType <= 1) {
+    batteryCellMinMv = batteryChemistryDefaultMv(batteryChemistry, BATTERY_CELL_MIN);
+    batteryCellNominalMv = batteryChemistryDefaultMv(batteryChemistry, BATTERY_CELL_NOMINAL);
+    batteryCellMaxMv = batteryChemistryDefaultMv(batteryChemistry, BATTERY_CELL_MAX);
+  }
+  // The curve and the coulomb counter were based on the old series count.
+  socSeedPercent = -1.0F;
+  socAhSinceSeed = 0.0F;
+  capacityStartSoc = -1.0F;
+  capacityAhUsed = 0.0F;
+}
+
 void batteryRestartChargeEstimate() {
   BatteryLock lock;
   // Load before checkpointing so a settings edit before the first telemetry

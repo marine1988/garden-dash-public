@@ -50,6 +50,7 @@ struct CruiseSettings {
 enum CruiseState : uint8_t {
   CRUISE_STATE_OFF,
   CRUISE_STATE_HOLDING,  // speed is steady, waiting for the hold time
+  CRUISE_STATE_ARMED,    // hold time elapsed; waiting for the throttle to rest
   CRUISE_STATE_ACTIVE,
   CRUISE_STATE_BLOCKED,  // kept for the existing UI/outcome mapping
 };
@@ -99,16 +100,20 @@ struct CruiseRuntime {
   float rpmPerKmh;     // kept for the record; not used to re-derive a setpoint
   uint32_t holdSinceMs;  // first tick of the current steady-speed window
   float holdSpeedKmh;    // speed the window is following
+  uint32_t activeSinceMs;   // when the ADC hold was requested
+  uint32_t speedOutSinceMs; // first tick speed left the target window, 0 if inside
 };
 
 // The two LispBM expressions the VESC ADC application understands. Engage keeps
 // the throttle attached (mode 2 detaches the buttons only) so the rider can
 // still brake with it after a release.
 constexpr const char *kCruiseLispEngage = "(progn (app-adc-detach 2 1) (app-adc-override 3 1))";
-constexpr const char *kCruiseLispRelease = "(app-adc-override 3 0)";
+// Clear the override and reattach the ADC buttons together. Leaving the buttons
+// detached after a normal release would ignore a physical cruise button until
+// the next engage.
+constexpr const char *kCruiseLispRelease = "(progn (app-adc-override 3 0) (app-adc-detach 2 0))";
 // If the engage expression is rejected after the detach form ran, give the
-// controller's physical buttons back. Releasing the override alone does not
-// reattach them.
+// controller's physical buttons back.
 constexpr const char *kCruiseLispDetachUndo = "(app-adc-detach 2 0)";
 
 // Battery-side current below this while cruising is read as the rider braking
@@ -126,6 +131,13 @@ constexpr float kCruiseSteadyDeadbandKmh = 2.0F;
 constexpr float kCruiseMinDriveAmps = 0.5F;
 // A running cruise cancels if speed climbs this far above the captured target.
 constexpr float kCruiseOverspeedMarginKmh = 3.0F;
+// The VESC's ADC cruise captures its setpoint when the throttle returns to
+// rest. Give that transition time to happen before judging a speed dip as a
+// rider takeover; otherwise a normal release looks like a cancel.
+constexpr uint32_t kCruiseEngageGraceMs = 1500;
+// A real throttle pull or coast keeps speed outside the target window; a
+// one-sample dip from a bump or a gear change should not release the cruise.
+constexpr uint32_t kCruiseSpeedCancelMs = 1200;
 
 // Applies one cycle and returns what, if anything, to send. Engagement is
 // automatic: `requestEngage` is retained for API compatibility but no button

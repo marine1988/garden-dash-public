@@ -38,6 +38,10 @@ bool setupValuesSupported = false;
 bool setupValuesProbed = false;
 VescSetupValues liveSetup = {};
 bool liveSetupValid = false;
+// The setup packet is usable for battery level even when the VESC's own speed
+// is zero because its wheel/pole setup is incomplete. Keep those two facts
+// apart so speed can fall back to eRPM without losing the battery reading.
+bool liveSetupSpeedValid = false;
 uint8_t setupFailures = 0;
 // The VESC's own setup values are the source of truth for wheel diameter, pole
 // count and gearing. Adopt them once per connection so a fresh display needs no
@@ -69,6 +73,8 @@ struct LispScratch {
   char expression[kVescProfileLispMaxLen];
   uint8_t payload[kVescProfileLispMaxLen + 16];
   uint8_t frame[VESC_MAX_FRAME];
+  uint8_t appConf[VESC_MAX_FRAME];
+  uint8_t appConfSet[VESC_MAX_FRAME];
 };
 LispScratch *lispScratch = nullptr;
 
@@ -91,6 +97,7 @@ enum LispPurpose : uint8_t {
   kLispNone = 0,
   kLispProfile,
   kLispCruise,
+  kLispConfig,
 };
 LispPurpose sentLispPurpose = kLispNone;
 bool lastLispReplyOk = false;
@@ -105,6 +112,13 @@ bool profileReplyOk = false;
 bool cruiseLispAwaitingReply = false;
 bool cruiseReplySeen = false;
 bool cruiseReplyOk = false;
+
+bool appConfChecked = false;
+bool appConfReady = false;
+bool configQuerySent = false;
+bool configQueryDone = false;
+uint32_t configQueryAtMs = 0;
+uint8_t configQueryAttempts = 0;
 
 // A cruise expression that could not go out because the REPL was still busy.
 // Only the latest rider action matters (release replaces a queued engage), so a
@@ -193,8 +207,15 @@ void resetVescSession() {
   setupValuesProbed = false;
   liveSetup = {};
   liveSetupValid = false;
+  liveSetupSpeedValid = false;
   setupFailures = 0;
   drivetrainAdoptedFromVesc = false;
+  appConfChecked = false;
+  appConfReady = false;
+  configQuerySent = false;
+  configQueryDone = false;
+  configQueryAtMs = 0;
+  configQueryAttempts = 0;
   lispSent = false;
   pendingCruiseLispActive = false;
   pendingCruiseLisp[0] = '\0';
@@ -215,11 +236,10 @@ void resetVescSession() {
 }
 
 bool vescSendPacket(const uint8_t *payload, size_t len) {
-  // The VESC frame length is one byte, so a longer payload is not a frame this
-  // protocol can carry. Check before narrowing: a CAN-wrapped profile plus a
-  // maximal expression would otherwise truncate the length to a few bytes.
-  if (!payload || len == 0 || len > 255 || !vescTransport || !ensureLispScratch()) return false;
-  const size_t frameLen = vescBuildFrame(payload, (uint8_t)len, lispScratch->frame,
+  // VESC switches to a two-byte length for payloads above 255 bytes. The frame
+  // buffer is sized for the largest app configuration.
+  if (!payload || len == 0 || len > 0xFFFFu || !vescTransport || !ensureLispScratch()) return false;
+  const size_t frameLen = vescBuildFrame(payload, len, lispScratch->frame,
                                          sizeof(lispScratch->frame));
   if (!frameLen) return false;
   const size_t written = vescTransport->write(lispScratch->frame, frameLen);
@@ -233,6 +253,34 @@ void vescSendControl(uint8_t command, int32_t value) {
   uint8_t payload[8];
   const size_t n = vescBuildControlPayload(command, vescCanId, value, payload, sizeof(payload));
   if (n) (void)vescSendPacket(payload, n);
+}
+
+void applyVescBatteryConfig(const VescConfigValues &values) {
+  const uint32_t deciAh = (uint32_t)lroundf(values.batteryAh * 10.0F);
+  batteryAdoptPackConfig(values.batteryCells, deciAh, values.batteryType);
+  gardenLogf("VESC battery: %uS %u.%u Ah, type %u\n",
+             (unsigned)batterySeriesCount, (unsigned)(deciAh / 10), (unsigned)(deciAh % 10),
+             (unsigned)values.batteryType);
+}
+
+
+bool vescEnsureCruiseButton();
+
+void vescServiceAppConf(uint32_t now) {
+  if (!cruiseControlEnabled || appConfChecked) return;
+  if (vescConnectedAtMs == 0 || (uint32_t)(now - vescConnectedAtMs) < 3000) return;
+  if (fabsf(vescData.rpm) > 200.0F) return;
+  if (vescCanId != 0) {
+    appConfChecked = true;
+    appConfReady = false;
+    gardenLog("VESC appconf: CAN target set; enable the ADC cruise button in VESC Tool");
+    return;
+  }
+  if (profileStepState != kProfileStepIdle || pendingCruiseLispActive || cruiseLispAwaitingReply) return;
+  appConfChecked = true;
+  appConfReady = vescEnsureCruiseButton();
+  if (!appConfReady)
+    gardenLog("VESC appconf: ADC cruise button is not ready; enable it in VESC Tool if cruise will not hold");
 }
 
 bool vescLispReady(uint32_t now) {
@@ -294,6 +342,39 @@ bool vescSendLispExpression(const char *expression, uint32_t now, LispPurpose pu
   lastLispSentMs = now;
   sentLispPurpose = purpose;
   return true;
+}
+
+bool requestVescConfigValues(VescConfigValues &out);
+
+void vescServiceConfigQuery(uint32_t now) {
+  if (configQueryDone || configQueryAttempts >= 3) return;
+  if (vescCanId != 0) {  // full mcconf is not reliable through CAN forwarding
+    configQueryDone = true;
+    return;
+  }
+  if (vescConnectedAtMs == 0 || (uint32_t)(now - vescConnectedAtMs) < 3000) return;
+  // Read config while stationary: it is a long exchange and must not compete
+  // with a rider's cruise engagement or a profile write.
+  if (fabsf(vescData.rpm) > 200.0F) return;
+  if (pendingCruiseLispActive || cruiseLispAwaitingReply || profileStepState != kProfileStepIdle) return;
+  if (configQuerySent) {
+    if ((uint32_t)(now - configQueryAtMs) < 2500) return;
+    configQuerySent = false;
+  }
+  VescConfigValues values = {};
+  configQueryAttempts++;
+  configQueryAtMs = now;
+  if (requestVescConfigValues(values)) {
+    applyVescBatteryConfig(values);
+    configQueryDone = true;
+    gardenLog("VESC config: battery setup read from the controller");
+    return;
+  }
+  configQuerySent = true;
+  if (configQueryAttempts >= 3) {
+    configQueryDone = true;
+    gardenLog("VESC config query gave up: keeping display-side battery values");
+  }
 }
 
 void vescQueueCruiseLisp(const char *expression) {
@@ -369,6 +450,12 @@ int vescReadPacket(uint8_t *payload, size_t capacity, uint32_t timeoutMs) {
       length = b;
       break;
     }
+    if (b == 3) {
+      uint8_t hi = 0, lo = 0;
+      if (!vescReadByte(hi, deadline) || !vescReadByte(lo, deadline)) return -1;
+      length = (uint16_t)((uint16_t)hi << 8 | lo);
+      break;
+    }
   }
   if (length == 0 || length > capacity) return -1;
   for (uint16_t i = 0; i < length; i++)
@@ -384,14 +471,14 @@ int vescReadPacket(uint8_t *payload, size_t capacity, uint32_t timeoutMs) {
 // the stream first (it is asynchronous), so it is recorded and skipped instead
 // of being mistaken for the telemetry answer or discarded before the request.
 // Stale replies to other commands are ignored the same way.
-int vescRequest(uint8_t command, uint8_t *msg, size_t capacity) {
+int vescRequestTimeout(uint8_t command, uint8_t *msg, size_t capacity, uint32_t timeoutMs) {
   if (!vescTransport) return -1;
   uint8_t payload[3];
   const size_t n = vescBuildCommandPayload(command, vescCanId, payload, sizeof(payload));
   if (n == 0) return -1;
   if (!vescSendPacket(payload, n)) return -1;
 
-  const uint32_t deadline = millis() + VESC_REPLY_TIMEOUT_MS;
+  const uint32_t deadline = millis() + timeoutMs;
   for (;;) {
     const int32_t remaining = (int32_t)(deadline - millis());
     if (remaining <= 0) return -1;
@@ -406,22 +493,119 @@ int vescRequest(uint8_t command, uint8_t *msg, size_t capacity) {
   }
 }
 
+int vescRequest(uint8_t command, uint8_t *msg, size_t capacity) {
+  return vescRequestTimeout(command, msg, capacity, VESC_REPLY_TIMEOUT_MS);
+}
+
+// The app configuration is several hundred bytes. At BLE MTU 20 it needs many
+// notifications, so the normal 100 ms telemetry timeout is too tight.
+constexpr uint32_t kAppConfTimeoutMs = 800;
+constexpr uint8_t kAppConfButtonsSerializedOffset = 111;
+constexpr size_t kAppConfButtonsPayloadIndex = 1 + kAppConfButtonsSerializedOffset;
+
+struct AppConfLayout {
+  uint32_t signature;
+  uint16_t serializedBytes;
+};
+constexpr AppConfLayout kAppConfLayouts[] = {
+    {486554156u, 493u},   // 6.00 / 6.02
+    {2099347128u, 278u},  // 6.05 / 6.06
+    {2384027283u, 284u},  // 7.00
+    {2802465283u, 290u},  // current master
+};
+
+bool vescSendAppConfNoStore(const uint8_t *serialized, size_t serializedBytes) {
+  if (!serialized || serializedBytes == 0 || serializedBytes + 1 > VESC_MAX_FRAME) return false;
+  uint8_t payload[VESC_MAX_FRAME];
+  payload[0] = VESC_COMM_SET_APPCONF_NO_STORE;
+  memcpy(payload + 1, serialized, serializedBytes);
+  if (!vescSendPacket(payload, serializedBytes + 1)) return false;
+  const uint32_t deadline = millis() + kAppConfTimeoutMs;
+  for (;;) {
+    const int32_t remaining = (int32_t)(deadline - millis());
+    if (remaining <= 0) return false;
+    uint8_t ack[VESC_MAX_FRAME];
+    const int len = vescReadPacket(ack, sizeof(ack), (uint32_t)remaining);
+    if (len <= 0) return false;
+    if (ack[0] == VESC_COMM_LISP_REPL_CMD) {
+      vescRecordLispReply(ack, (size_t)len);
+      continue;
+    }
+    if (ack[0] == VESC_COMM_SET_APPCONF_NO_STORE) return true;
+  }
+}
+
+bool requestVescConfigValues(VescConfigValues &out) {
+  if (!ensureLispScratch() || !vescTransport) return false;
+  // The full mcconf reply is a long frame (up to 493 bytes); the ordinary
+  // telemetry timeout is far too short for it, especially over BLE.
+  const int len = vescRequestTimeout(VESC_COMM_GET_MCCONF, lispScratch->appConf,
+                                     sizeof(lispScratch->appConf), kAppConfTimeoutMs);
+  if (len <= 0) return false;
+  return vescParseMcconfConfig(lispScratch->appConf, (size_t)len, out);
+}
+bool vescEnsureCruiseButton() {
+  if (!ensureLispScratch() || !vescTransport) return false;
+  int len = vescRequestTimeout(VESC_COMM_GET_APPCONF, lispScratch->appConf, sizeof(lispScratch->appConf),
+                               kAppConfTimeoutMs);
+  if (len < 5) return false;
+  const uint8_t *conf = lispScratch->appConf;
+  const uint32_t signature = ((uint32_t)conf[1] << 24) | ((uint32_t)conf[2] << 16) |
+                             ((uint32_t)conf[3] << 8) | (uint32_t)conf[4];
+  const AppConfLayout *layout = nullptr;
+  for (const AppConfLayout &candidate : kAppConfLayouts)
+    if (candidate.signature == signature && (size_t)len == (size_t)candidate.serializedBytes + 1)
+      layout = &candidate;
+  if (!layout) {
+    gardenLogf("VESC appconf: unknown layout (signature %u, %d bytes); cruise button not changed\n",
+               (unsigned)signature, len);
+    return false;
+  }
+  if (kAppConfButtonsPayloadIndex >= (size_t)len) return false;
+  if ((conf[kAppConfButtonsPayloadIndex] & 0x01) != 0) return true;
+
+  memcpy(lispScratch->appConfSet, conf, (size_t)len);
+  lispScratch->appConfSet[0] = VESC_COMM_SET_APPCONF_NO_STORE;
+  lispScratch->appConfSet[kAppConfButtonsPayloadIndex] |= 0x01;
+  if (!vescSendAppConfNoStore(lispScratch->appConfSet + 1, (size_t)len - 1)) {
+    gardenLog("VESC appconf: set-no-store did not acknowledge");
+    return false;
+  }
+
+  len = vescRequestTimeout(VESC_COMM_GET_APPCONF, lispScratch->appConf, sizeof(lispScratch->appConf),
+                           kAppConfTimeoutMs);
+  if (len < 5) return false;
+  if ((lispScratch->appConf[kAppConfButtonsPayloadIndex] & 0x01) == 0) {
+    gardenLog("VESC appconf: cruise button bit did not stick");
+    return false;
+  }
+  for (int i = 1; i < len; i++) {
+    if ((size_t)i == kAppConfButtonsPayloadIndex) continue;
+    if (lispScratch->appConf[i] != lispScratch->appConfSet[i]) {
+      gardenLog("VESC appconf: read-back differs outside the cruise button bit");
+      return false;
+    }
+  }
+  gardenLog("VESC appconf: ADC cruise button enabled in RAM");
+  return true;
+}
+
 bool requestValues() {
-  uint8_t msg[128];
+  uint8_t msg[VESC_MAX_FRAME];
   const int len = vescRequest(VESC_COMM_GET_VALUES, msg, sizeof(msg));
   if (len <= 0) return false;
   return vescParseValues(msg, (size_t)len, vescData);
 }
 
 bool requestFwVersion(uint8_t &major, uint8_t &minor) {
-  uint8_t msg[128];
+  uint8_t msg[VESC_MAX_FRAME];
   const int len = vescRequest(VESC_COMM_FW_VERSION, msg, sizeof(msg));
   if (len <= 0) return false;
   return vescParseFwVersion(msg, (size_t)len, major, minor);
 }
 
 bool requestSetupValues(VescSetupValues &out) {
-  uint8_t msg[128];
+  uint8_t msg[VESC_MAX_FRAME];
   const int len = vescRequest(VESC_COMM_GET_VALUES_SETUP, msg, sizeof(msg));
   if (len <= 0) return false;
   return vescParseSetupValues(msg, (size_t)len, out);
@@ -445,6 +629,12 @@ void updateSetupValues() {
     }
     liveSetup = setup;
     liveSetupValid = true;
+    // A VESC with no wheel diameter configured reports speed 0 while eRPM is
+    // clearly moving. That is not a usable speed source, but the packet still
+    // carries a valid battery level, so keep it and fall back only for speed.
+    liveSetupSpeedValid = !(fabsf(vescData.rpm) > 200.0F && fabsf(setup.speedMs) < 0.05F);
+    if (!liveSetupSpeedValid)
+      gardenLog("VESC setup speed is zero while eRPM is moving: using eRPM fallback");
     setupValuesSupported = true;
     setupFailures = 0;
   } else if (!setupValuesProbed) {
@@ -472,7 +662,7 @@ void fillVescSample(ControllerSample &out, uint32_t now) {
   out = {};
   out.sampledAtMs = now;
   const float trim = speedCalibration();
-  if (liveSetupValid) {
+  if (liveSetupValid && liveSetupSpeedValid) {
     out.values.speedKmh = max(0, (int)lroundf(fabsf(liveSetup.speedMs) * 3.6F * trim));
     out.values.odoKm = (int)lroundf(liveSetup.distanceAbsM / 1000.0F * trim);
     out.values.tripKm = max(0.0F, (liveSetup.distanceAbsM - tripStartDistanceM) / 1000.0F * trim);
@@ -507,18 +697,19 @@ void fillVescSample(ControllerSample &out, uint32_t now) {
   out.derived = TELEMETRY_FIELD_PHASE_VOLTAGE | TELEMETRY_FIELD_POWER | TELEMETRY_FIELD_AVG_SPEED |
                 TELEMETRY_FIELD_UPTIME;
   if (!vescBatteryLevel) out.derived |= TELEMETRY_FIELD_BATTERY_SOC;
-  if (!liveSetupValid)
+  if (!liveSetupValid || !liveSetupSpeedValid)
     out.derived |= TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_TRIP_DISTANCE | TELEMETRY_FIELD_ODOMETER;
   out.faultCode = (uint8_t)vescData.faultCode;
   out.firmwareMajor = vescFwMajor;
   out.firmwareMinor = vescFwMinor;
   out.firmwareKnown = vescFwMajor != 0;
 
-  const float counterKm = liveSetupValid
+  const bool setupDistanceValid = liveSetupValid && liveSetupSpeedValid;
+  const float counterKm = setupDistanceValid
                               ? liveSetup.distanceAbsM / 1000.0F * trim
                               : tachometerToKm(vescData.tachometerAbs) * trim;
   out.energy.available = true;
-  out.energy.rebaseDistance = liveSetupValid != countersFromSetup;
+  out.energy.rebaseDistance = setupDistanceValid != countersFromSetup;
   out.energy.ampHours = vescData.ampHours;
   out.energy.ampHoursCharged = vescData.ampHoursCharged;
   out.energy.wattHours = vescData.wattHours;
@@ -526,7 +717,7 @@ void fillVescSample(ControllerSample &out, uint32_t now) {
   out.energy.odometerKm = counterKm;
   out.energy.voltage = vescData.inpVoltage;
   out.energy.current = vescData.avgInputCurrent;
-  countersFromSetup = liveSetupValid;
+  countersFromSetup = setupDistanceValid;
 }
 
 }  // namespace
@@ -765,8 +956,15 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
       vescConnected = false;
       setupValuesSupported = false;
       liveSetupValid = false;
+      liveSetupSpeedValid = false;
       drivetrainAdoptedFromVesc = false;
-      vescFwMajor = 0;
+      appConfChecked = false;
+      appConfReady = false;
+      configQuerySent = false;
+      configQueryDone = false;
+      configQueryAtMs = 0;
+      configQueryAttempts = 0;
+          vescFwMajor = 0;
       vescFwMinor = 0;
       // The link is gone, so the display can neither hold nor release a
       // running cruise: there is no transport to send on. The ADC application
@@ -805,8 +1003,15 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     setupValuesProbed = false;
     setupValuesSupported = false;
     liveSetupValid = false;
+    liveSetupSpeedValid = false;
     setupFailures = 0;
     drivetrainAdoptedFromVesc = false;
+    appConfChecked = false;
+    appConfReady = false;
+    configQuerySent = false;
+    configQueryDone = false;
+    configQueryAtMs = 0;
+    configQueryAttempts = 0;
     countersFromSetup = false;
     // A fresh link starts with cruise idle: whatever was commanded belonged to
     // the previous session and must not resume silently.
@@ -816,6 +1021,10 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     cruiseRuntime.rpmPerKmh = 0.0F;
     cruiseRequestPending = 0;
     portEXIT_CRITICAL(&cruiseMux);
+    // The VESC may still hold a native cruise latch from a display crash or a
+    // BLE drop. Clear it and reattach the ADC buttons before this session can
+    // engage anything.
+    vescQueueCruiseLisp(kCruiseLispRelease);
     // Re-apply the profile the rider actually applied on every reconnect. The
     // controller's limits live in RAM only (conf-set, no store), so a power
     // cycle or link drop wipes them. Selecting a slot in the menu is not an
@@ -907,6 +1116,8 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
   // showing the controller's own numbers. Runs last so it cannot delay the
   // telemetry the dashboard draws from.
   vescProfileStep(now, rpmPerKmh);
+  vescServiceAppConf(now);
+  vescServiceConfigQuery(now);
   return CONTROLLER_POLL_UPDATED;
 }
 

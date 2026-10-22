@@ -260,13 +260,16 @@ Calibration, Gauge Ranges, Profiles and Cruise are built by
 
 Cruise is offered only on a VESC link. It is entirely display-side and has no
 engage button: the telemetry task watches for a steady speed (within 2 km/h)
-with positive drive current, starts a `HOLDING` timer, and after the configured
-hold time sends the native ADC cruise expression. It releases on a brake, a
-speed change, a stop below the minimum, an overspeed, a fault, a lost link or
-switching cruise off. Page 1 edits enable, hold time, minimum and maximum speed;
-page 2 shows `STATE`, `HOLD TIME` and how to cancel. The VESC still needs the ADC
-application and its "Cruise control button" enabled; no separate cruise package
-is used.
+with positive drive current, starts a `HOLDING` timer, and when the hold time
+ends moves to `ARMED`. It sends the native ADC cruise expression only when the
+rider releases the throttle, because the VESC ADC branch captures its setpoint
+at throttle rest. It releases on a brake, a sustained speed change, a stop below
+the minimum, an overspeed, a fault, a lost link or switching cruise off. Page 1
+edits enable, hold time, minimum and maximum speed; page 2 shows `STATE`,
+`HOLD TIME` and how to cancel. When the VESC app-config layout is known, the
+display also sets the ADC "Cruise control button" bit in RAM at connection, so
+the rider does not have to enable it in VESC Tool. No separate cruise package is
+used.
 
 Profiles is three pages. Slots (page 1) lists the three named profiles: tapping
 one selects it for editing, and the badge follows the selection. Limits (page 2)

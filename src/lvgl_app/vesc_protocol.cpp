@@ -1,5 +1,6 @@
 #include "vesc_protocol.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 float vescEstimatePhasePeakVoltage(float batteryVoltage, float dutyCycle) {
@@ -95,14 +96,21 @@ int32_t vescEncodeCurrent(float amps) {
   return (int32_t)lroundf(amps * VESC_CURRENT_SCALE);
 }
 
-size_t vescBuildFrame(const uint8_t *payload, uint8_t payloadLen, uint8_t *out, size_t cap) {
-  if (!payload || !out || payloadLen == 0) return 0;
-  const size_t frameLen = (size_t)payloadLen + 5u;
+size_t vescBuildFrame(const uint8_t *payload, size_t payloadLen, uint8_t *out, size_t cap) {
+  if (!payload || !out || payloadLen == 0 || payloadLen > 0xFFFFu) return 0;
+  const bool longFrame = payloadLen > 255u;
+  const size_t frameLen = payloadLen + (longFrame ? 6u : 5u);
   if (cap < frameLen) return 0;
   size_t n = 0;
-  out[n++] = 2;
-  out[n++] = payloadLen;
-  for (uint8_t i = 0; i < payloadLen; i++) out[n++] = payload[i];
+  if (longFrame) {
+    out[n++] = 3;
+    out[n++] = (uint8_t)(payloadLen >> 8);
+    out[n++] = (uint8_t)(payloadLen & 0xFF);
+  } else {
+    out[n++] = 2;
+    out[n++] = (uint8_t)payloadLen;
+  }
+  for (size_t i = 0; i < payloadLen; i++) out[n++] = payload[i];
   const uint16_t crc = vescCrc16(payload, payloadLen);
   out[n++] = (uint8_t)(crc >> 8);
   out[n++] = (uint8_t)(crc & 0xFF);
@@ -225,6 +233,43 @@ size_t vescBuildLispPayload(const char *expression, uint8_t *out, size_t cap) {
   n += len;
   out[n++] = 0;
   return n;
+}
+
+bool vescParseMcconfConfig(const uint8_t *payload, size_t len, VescConfigValues &out) {
+  if (!payload || len < 100 || payload[0] != VESC_COMM_GET_MCCONF) return false;
+  const uint32_t signature = ((uint32_t)payload[1] << 24) | ((uint32_t)payload[2] << 16) |
+                             ((uint32_t)payload[3] << 8) | (uint32_t)payload[4];
+  if (signature != 0x1C17AFEEu) return false;
+
+  // Payload lengths include the command byte. 482 is 6.02; 6.05, 6.06, 7.00
+  // and current master use the larger tail. Unknown layouts are rejected.
+  size_t typeIndex = 0, cellsIndex = 0, ahIndex = 0;
+  if (len == 482) {
+    typeIndex = len - 21;
+    cellsIndex = len - 20;
+    ahIndex = len - 19;
+  } else if (len == 478 || len == 484 || len == 489 || len == 493) {
+    typeIndex = len - 27;
+    cellsIndex = len - 26;
+    ahIndex = len - 25;
+  } else {
+    return false;
+  }
+  if (ahIndex + 4 > len) return false;
+  const uint8_t type = payload[typeIndex];
+  const uint8_t cells = payload[cellsIndex];
+  size_t index = ahIndex;
+  const float ah = vescReadFloat32Auto(payload, index);
+  if (type > 2 || cells < 4 || cells > 32 || !isfinite(ah) || ah <= 0.0F || ah > 1000.0F)
+    return false;
+  out.batteryType = type;
+  out.batteryCells = cells;
+  out.batteryAh = ah;
+  out.motorPoles = 0;
+  out.gearRatio = 0.0F;
+  out.wheelDiameterM = 0.0F;
+  out.valid = true;
+  return true;
 }
 
 bool vescParseMcconfTemp(const uint8_t *payload, size_t len, VescMcconfTemp &out) {

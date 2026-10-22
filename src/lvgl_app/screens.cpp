@@ -5942,6 +5942,7 @@ static void showSubmenu() {
     controllerCruiseState(state);
     const bool active = state == CRUISE_STATE_ACTIVE;
     const bool holding = state == CRUISE_STATE_HOLDING;
+    const bool armed = state == CRUISE_STATE_ARMED;
     uint16_t targetKmh = 0;
     if (active) controllerCruiseActive(targetKmh);
     char value[160];
@@ -5976,6 +5977,12 @@ static void showSubmenu() {
                      "Bremsen oder langsamer werden zum Abbrechen.", "Freinez ou ralentissez pour annuler.",
                      "Frena o reduce para cancelar.", "Frena o rallenta per annullare."));
         makeExplanationAt(scr, 186, value);
+      } else if (armed) {
+        snprintf(value, sizeof(value), "%s. %s", txt("READY", "VALMIS", "BEREIT", "PRÊT", "LISTO", "PRONTO"),
+                 txt("Release the throttle to engage.", "Päästä kaasu irti kytkeäksesi.",
+                     "Gas loslassen zum Aktivieren.", "Relâchez l'accélérateur pour activer.",
+                     "Suelta el acelerador para activar.", "Rilascia l'acceleratore per attivare."));
+        makeExplanationAt(scr, 186, value);
       } else if (holding) {
         snprintf(value, sizeof(value), "%s. %s", txt("HOLD STEADY", "PIDÄ TASAINEN", "HALTEN", "MAINTENEZ",
                                                              "MANTÉN", "MANTIENI"),
@@ -5995,6 +6002,7 @@ static void showSubmenu() {
     } else {
       const char *stateText = active ? txt("CRUISE ON", "VAKIONOPEUS PÄÄLLÄ", "TEMPOMAT AN", "RÉGULATEUR ACTIF",
                                            "CRUCERO ACTIVO", "CRUISE ATTIVO")
+                              : armed ? txt("ARMED", "VALMIS", "BEREIT", "PRÊT", "LISTO", "PRONTO")
                               : holding ? txt("HOLDING", "PIDETÄÄN", "HALTEN", "MAINTIEN", "MANTENIENDO", "IN ATTESA")
                                         : txt("OFF", "POIS", "AUS", "INACTIF", "INACTIVO", "SPENTO");
       makeMenuButton(scr, kMenuEdgeX, 44, kMenuContentW, 42,

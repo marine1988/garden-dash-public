@@ -183,7 +183,7 @@ void clearController() {
 }
 
 void answer(uint8_t command, const uint8_t *payload, size_t payloadLength) {
-  uint8_t frame[80];
+  uint8_t frame[600];
   size_t length = 0;
   switch (command) {
     case fake_vesc::kCommandGetValues:
@@ -199,13 +199,34 @@ void answer(uint8_t command, const uint8_t *payload, size_t payloadLength) {
     case fake_vesc::kCommandGetMcconfTemp:
       length = fake_vesc::makeMcconfTempFrame(frame, sizeof(frame), controller.mcconf);
       break;
+    case 17:  // COMM_GET_APPCONF
+      length = fake_vesc::makeAppConfFrame(frame, sizeof(frame), controller.appConf,
+                                           controller.appConfLen);
+      break;
+    case 149:  // COMM_SET_APPCONF_NO_STORE
+      if (payloadLength > 1 && payloadLength - 1 <= fake_vesc::ControllerState::kAppConfBytes) {
+        memcpy(controller.appConf, payload + 1, payloadLength - 1);
+        controller.appConfLen = uint16_t(payloadLength - 1);
+        if (controller.appConfLen > 111)
+          controller.cruiseButtonEnabled = (controller.appConf[111] & 0x01) != 0;
+      }
+      length = fake_vesc::makeAppConfAckFrame(frame, sizeof(frame));
+      break;
     case fake_vesc::kCommandLispReplCmd: {
       const char *reply = "ERR";
       // The payload after the command id is the expression plus its NUL. A
       // missing terminator is malformed, not a reason to read past the frame.
       if (payload && payloadLength >= 2 && memchr(payload + 1, '\0', payloadLength - 1)) {
-        reply = controller.applyLisp((const char *)(payload + 1), cycleSample.erpm,
-                                     cycleSample.speedMmPerS);
+        const char *expression = (const char *)(payload + 1);
+        // A display config query asks for the VESC's own battery and drivetrain
+        // settings. Real firmware prints the Lisp result as COMM_LISP_PRINT,
+        // then acknowledges the REPL command separately.
+        if (strstr(expression, "conf-get") != nullptr) {
+          const size_t printLength = fake_vesc::makeLispPrintFrame(
+              frame, sizeof(frame), "> [13 20.000000 14 1.000000 0.254000]");
+          if (printLength) sendFrame(frame, printLength);
+        }
+        reply = controller.applyLisp(expression, cycleSample.erpm, cycleSample.speedMmPerS);
       }
       length = fake_vesc::makeLispReplyFrame(frame, sizeof(frame), reply);
       break;
@@ -229,22 +250,26 @@ size_t requestUsed = 0;
 void consumeRequests() {
   for (;;) {
     size_t start = 0;
-    while (start < requestUsed && requestBuffer[start] != 2) start++;
+    while (start < requestUsed && requestBuffer[start] != 2 && requestBuffer[start] != 3) start++;
     if (start) {
       badRequests.fetch_add(1);
       memmove(requestBuffer, requestBuffer + start, requestUsed - start);
       requestUsed -= start;
     }
-    if (requestUsed < 2) return;
-    const size_t length = requestBuffer[1];
-    const size_t total = length + 5;
-    if (length == 0 || total > sizeof(requestBuffer)) {  // longer than any request of ours
+    if (requestUsed < 3) return;
+    const bool longFrame = requestBuffer[0] == 3;
+    const size_t header = longFrame ? 3 : 2;
+    const size_t length = longFrame
+                              ? (size_t(requestBuffer[1]) << 8) | requestBuffer[2]
+                              : requestBuffer[1];
+    const size_t total = length + header + 3;
+    if (length == 0 || total > sizeof(requestBuffer)) {
       badRequests.fetch_add(1);
       memmove(requestBuffer, requestBuffer + 1, --requestUsed);
       continue;
     }
     if (requestUsed < total) return;  // wait for the rest
-    const uint8_t *payload = requestBuffer + 2;
+    const uint8_t *payload = requestBuffer + header;
     const uint16_t crc = uint16_t(uint16_t(payload[length]) << 8) | payload[length + 1];
     const bool valid = payload[length + 2] == 3 && fake_vesc::crc16(payload, length) == crc;
     if (valid) {

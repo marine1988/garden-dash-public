@@ -348,6 +348,9 @@ void setBatteryChemistry(uint8_t chemistry);
 // over, because both were derived from the old curve.
 void batteryNormalizeCellVoltages(BatteryCellVoltage edited);
 void batteryRestartChargeEstimate();
+// Adopt the pack shape read from the VESC. Keeps lifetime/learned history but
+// restarts the voltage/coulomb seed because the series count changed.
+void batteryAdoptPackConfig(uint8_t seriesCount, uint32_t capacityDeciAh, uint8_t vescBatteryType);
 const BatteryStats &batteryStatsLive();
 int batterySocFromVoltage(float packVoltage);  // open-circuit curve, no counting
 void loadBatteryStats();

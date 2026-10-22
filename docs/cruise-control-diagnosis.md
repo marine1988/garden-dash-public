@@ -197,14 +197,18 @@ steady-speed timer:
 
 - When speed is inside the configured window, changes by less than 2 km/h,
   and the controller is still drawing at least 0.5 A of drive current, the
-  state becomes `HOLDING`. After the configured hold time the display sends the
-  native ADC cruise expression `(progn (app-adc-detach 2 1)
-  (app-adc-override 3 1))` and becomes `ACTIVE`.
+  state becomes `HOLDING`. After the configured hold time it becomes `ARMED`.
+  The VESC ADC branch only captures its setpoint when the throttle is at rest,
+  so the display sends `(progn (app-adc-detach 2 1)
+  (app-adc-override 3 1))` and enters `ACTIVE` only when the rider releases the
+  throttle.
 - There is no engage button. The cruise page edits enable, hold time, minimum
   and maximum speed; page 2 shows `STATE`, `HOLD TIME` and how to cancel.
-- A brake (battery current below -5 A), a speed change of more than 3 km/h, a
-  stop below the minimum, an overspeed, a fault, a dead link or switching cruise
-  off sends `(app-adc-override 3 0)` and returns to `OFF`.
+- A brake (battery current below -5 A), a sustained speed change of more than
+  3 km/h, a stop below the minimum, an overspeed, a fault, a dead link or
+  switching cruise off sends `(app-adc-override 3 0)` and returns to `OFF`.
+  A short dip after engage is ignored for 1.5 s, and a speed deviation must
+  persist for 1.2 s before it cancels.
 - The dashboard shows a green `CRUISE <speed>` chip while the state is `ACTIVE`.
 - The display cannot read the throttle pin, so "steady throttle" is approximated
   by steady speed plus positive drive current. A rider who holds a constant
@@ -215,11 +219,15 @@ steady-speed timer:
 
 - The VESC must be in the **ADC** application, with throttle on ADC1 and brake
   on ADC2, because the native cruise holds the ADC application's captured eRPM.
-- **App → ADC → "Cruise control button" must be enabled** (bit 0 of
-  `app_conf.adc.buttons`; firmware default 0, `appconf_default.h:180`). With it
-  off the ADC application forces `cc_button` false (`app_adc.c:330`) and no
-  cruise can engage. There is no LispBM binding for the ADC configuration, so
-  this remains a VESC Tool setting.
+- **App → ADC → "Cruise control button"** (bit 0 of `app_conf.adc.buttons`) is
+  set automatically in RAM by the display when the VESC app-config layout is
+  known. The write is `COMM_GET_APPCONF` → set bit 0 → `COMM_SET_APPCONF_NO_STORE`
+  → read back and verify. The VESC flash is not touched. If the layout is
+  unknown, enable the bit once in VESC Tool; a missing bit makes the ADC
+  application force `cc_button` false (`app_adc.c:330`) and no cruise holds.
 - Remove or disable the separate `vesc_cruise_control` package: it also watches
   the ADC and would fight the display's native cruise. The display does not need
   it.
+- The VESC's own battery/drivetrain setup is read automatically: full
+  `COMM_GET_MCCONF` for battery type/cells/Ah, and `COMM_GET_MCCONF_TEMP` for
+  wheel diameter, pole count and gearing.

@@ -27,6 +27,8 @@ enum : uint8_t {
   VESC_COMM_SET_CURRENT_BRAKE = 7,
   VESC_COMM_SET_RPM = 8,
   VESC_COMM_FORWARD_CAN = 34,
+  VESC_COMM_GET_MCCONF = 14,
+  VESC_COMM_GET_APPCONF = 17,
   VESC_COMM_GET_VALUES_SETUP = 47,
   // Reads the controller's live profile numbers -- current scales, speed (ERPM),
   // duty and power limits -- to confirm a write and to show the rider what the
@@ -39,7 +41,9 @@ enum : uint8_t {
   // is the only route to field weakening, which has no GET/SET_MCCONF_TEMP field.
   // The firmware rate-limits it to one command per
   // 0.5 s, so callers must not send these back to back.
+  VESC_COMM_LISP_PRINT = 135,
   VESC_COMM_LISP_REPL_CMD = 138,
+  VESC_COMM_SET_APPCONF_NO_STORE = 149,
 };
 
 // Longest frame this module builds: CAN-forward prefix, one command id, and the
@@ -50,7 +54,9 @@ enum : size_t { VESC_MAX_COMMAND_FRAME = 16 };
 // (1) + Lisp payload (id + up to kVescProfileLispMaxLen expression + NUL) +
 // framing overhead (5). A LispBM profile expression needs ~200 bytes, so the
 // old frame[16] buffer silently dropped every profile write.
-enum : size_t { VESC_MAX_FRAME = 265 };
+// VESC 16-bit length frames are needed for a full app configuration. The
+// largest supported appconf (6.00/6.02) is 494 bytes including its command id.
+enum : size_t { VESC_MAX_FRAME = 520 };
 
 // The COMM_GET_VALUES fields this firmware consumes. The packet carries more
 // (avg_id, avg_iq, pid position, controller id); they are skipped
@@ -111,7 +117,7 @@ int32_t vescEncodeCurrent(float amps);
 
 // Wraps a payload in start/length/CRC/stop. Returns the frame length, or 0 if
 // the payload does not fit `cap`.
-size_t vescBuildFrame(const uint8_t *payload, uint8_t payloadLen, uint8_t *out, size_t cap);
+size_t vescBuildFrame(const uint8_t *payload, size_t payloadLen, uint8_t *out, size_t cap);
 
 // Parsers. Each validates the command id and a minimum length before reading,
 // and leaves `out` untouched when it returns false.
@@ -121,6 +127,25 @@ bool vescParseFwVersion(const uint8_t *payload, size_t len, uint8_t &major, uint
 
 // The COMM_GET_MCCONF_TEMP reply fields read back to confirm a profile took and
 // to show the rider the controller's own numbers rather than the display's.
+// The setup block read with LispBM `(conf-get ...)`: battery series/capacity
+// and the drivetrain values. Kept separate from VescMcconfTemp because a VESC
+// can answer the Lisp query even when COMM_GET_MCCONF_TEMP omits it.
+struct VescConfigValues {
+  uint8_t batteryType;  // VESC BATTERY_TYPE_*: 0 Li-ion, 1 LiFePO4, 2 lead-acid
+  uint8_t batteryCells;
+  float batteryAh;
+  uint8_t motorPoles;
+  float gearRatio;
+  float wheelDiameterM;
+  bool valid;
+};
+
+// Parses the tail of a full COMM_GET_MCCONF reply. The serialized layout has
+// the same setup block before the BMS tail on 6.02 and 6.05+; the tail length
+// differs by six bytes, so the parser accepts the known payload lengths and
+// validates the signature/values rather than guessing.
+bool vescParseMcconfConfig(const uint8_t *payload, size_t len, VescConfigValues &out);
+
 struct VescMcconfTemp {
   float currentMinScale;
   float currentMaxScale;

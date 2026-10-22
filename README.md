@@ -119,16 +119,17 @@ settings screen, and the ride replay views.
   are configured; otherwise the display falls back to resting voltage plus
   coulomb counting. Speed and distance come from the VESC when it reports them;
   otherwise eRPM is converted with wheel/pole/gear values read from the VESC.
-  Capacity, chemistry and range remain display-side estimates for Li-ion, LiPo
-  or LiFePO4 packs, with learned pack resistance and Wh/km.
+  Pack type, series count and capacity are adopted from the VESC's own setup
+  when configured; otherwise they remain display-side settings. Range, learned
+  resistance and Wh/km stay estimates for Li-ion, LiPo or LiFePO4 packs.
 - **Ride logging** to a microSD card, with automatic start and stop, and
   on-device ride replay
 - **Signed firmware updates over Bluetooth**, with rollback-safe dual-slot OTA
 - **Auto-brightness** from the front light sensor, and an optional ambient RGB
   LED that follows the accent colour
-- **Cruise control** over a VESC link: engages by itself after a steady-speed
-  hold, and releases on braking, a speed change, a controller fault or a lost
-  link
+- **Cruise control** over a VESC link: arms after a steady-speed hold, engages
+  when the throttle is released, and releases on braking, a sustained speed
+  change, a controller fault or a lost link
 - **Controller profiles**: three named setups -- Eco, Drive and Sport -- holding
   the speed limit, the acceleration and braking scales, field weakening, and the
   motor and battery current limits. Applying one writes it to the controller and
@@ -170,12 +171,13 @@ screens, not a mock-up. Task layout, data flow and threading rules are in
 The firmware displays and records telemetry. It also offers a display-side cruise
 control. On a VESC it drives the controller's own ADC application hold over
 LispBM, so the setpoint survives the throttle application that would overwrite a
-plain `COMM_SET_RPM` frame. There is no engage button: the display engages by
-itself after the scooter has held a steady speed for the configured hold time. It
-releases on braking (regenerative current), a real speed change, falling below
-the configured minimum, a controller fault, or a lost link. It needs the ADC
-application's "Cruise control button" enabled in VESC Tool and no separate VESC
-cruise package. Controller profiles go further and set the controller's live speed and current
+plain `COMM_SET_RPM` frame. There is no engage button: the display arms
+after the scooter has held a steady speed for the configured hold time, then
+engages when the throttle is released. It releases on braking (regenerative
+current), a sustained speed change, falling below the configured minimum, a
+controller fault, or a lost link. It needs the ADC application; the display sets
+its "Cruise control button" bit in RAM when the VESC app-config layout is known,
+and no separate VESC cruise package is used. Controller profiles go further and set the controller's live speed and current
 limits -- forward and reverse speed, acceleration and braking scales, field
 weakening, and the motor and battery current ceilings -- through a LispBM
 `conf-set` expression, then read them back to confirm. `conf-set` changes only

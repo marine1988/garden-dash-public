@@ -10,7 +10,9 @@ namespace {
 constexpr char kService[] = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char kRx[] = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr char kTx[] = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-constexpr size_t kRingSize = 512;
+// A full COMM_GET_MCCONF reply is a 493-byte payload plus framing. Leave room
+// for a partially received long frame and the largest BLE notification.
+constexpr size_t kRingSize = 1024;
 enum CommandType : uint8_t { CMD_SCAN, CMD_CONNECT, CMD_CONNECT_SAVED, CMD_DISCONNECT, CMD_FORGET, CMD_RELEASE };
 struct Command { CommandType type; uint8_t index; };
 

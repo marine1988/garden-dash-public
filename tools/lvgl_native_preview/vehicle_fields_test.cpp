@@ -429,6 +429,24 @@ void testBatteryLearningInvalidation() {
 
 }  // namespace
 
+void testVescPackAdoption() {
+  batteryAdoptPackConfig(13, 200, 0);
+  expect(batterySeriesCount == 13, "VESC pack adoption sets series");
+  expect(batteryCapacityDeciAh == 200, "VESC pack adoption sets capacity");
+  expect(batteryChemistry == BATTERY_LIION, "VESC Li-ion type maps to Li-ion");
+  expect(batteryCellNominalMv == 3600, "VESC Li-ion type restores its cell defaults");
+
+  batteryAdoptPackConfig(16, 300, 1);
+  expect(batterySeriesCount == 16 && batteryCapacityDeciAh == 300,
+         "VESC LiFePO4 pack adoption updates series and capacity");
+  expect(batteryChemistry == BATTERY_LIFEPO4, "VESC LiFePO4 type maps to LiFePO4");
+  expect(batteryCellMaxMv == 3650, "VESC LiFePO4 type restores its cell defaults");
+
+  batteryAdoptPackConfig(3, 60, 0);  // factory-default 3S guess
+  expect(batterySeriesCount == 16 && batteryCapacityDeciAh == 300,
+         "implausible 3S VESC default is ignored");
+}
+
 int main() {
   // Keep the settings in memory: these tests are about parsing, not storage.
   previewPreferencesConfigure("", true);
@@ -442,6 +460,7 @@ int main() {
   testFieldMetadata();
   testBatteryChemistry();
   testBatteryLearningInvalidation();
+  testVescPackAdoption();
 
   if (failures == 0) printf("vehicle field model: all checks passed\n");
   return failures == 0 ? 0 : 1;

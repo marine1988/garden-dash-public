@@ -96,8 +96,8 @@ and any failed step. Test both original and alternate CYD panels.
 - [ ] Tapping the profile badge on the dashboard cycles Eco/Drive/Sport,
       updates the badge immediately, and queues that profile to the controller.
 - [ ] Cruise has no engage button. Holding a steady speed for the configured
-      hold time shows `HOLDING` and then engages; the dashboard shows a green
-      `CRUISE <speed>` chip.
+      hold time shows `HOLDING`, then `ARMED`; releasing the throttle engages
+      and the dashboard shows a green `CRUISE <speed>` chip.
 - [ ] Braking, a real speed change, a stop below the minimum, a fault or link
       loss releases the cruise and hides the chip.
 - [ ] The cruise page shows state, hold time and how to cancel; page 1 still

@@ -394,15 +394,46 @@ void testAutomaticHoldEngages() {
   expect(out.state == CRUISE_STATE_HOLDING && !out.send, "auto: still holding at half time");
 
   out = cruiseControlStep(rt, s, in, false, false, 3000);
-  expect(out.state == CRUISE_STATE_ACTIVE && sentEngage(out), "auto: engages after the hold time");
+  expect(out.state == CRUISE_STATE_ARMED && !out.send, "auto: arms after the hold time");
+  in.avgInputCurrent = 0.0F;  // throttle released, ADC can capture the setpoint
+  out = cruiseControlStep(rt, s, in, false, false, 3100);
+  expect(out.state == CRUISE_STATE_ACTIVE && sentEngage(out), "auto: engages when throttle is released");
   expect(out.outcome == CRUISE_OUTCOME_ENGAGED, "auto: outcome ENGAGED");
   expect(rt.targetKmh == 20, "auto: captures the steady speed");
 
-  // A speed change beyond the deadband cancels a running cruise.
+  // A speed change beyond the deadband cancels a running cruise, but only
+  // after the transition grace and a sustained deviation.
+  in.avgInputCurrent = 10.0F;
   in.speedKmh = 25.0F;
-  out = cruiseControlStep(rt, s, in, false, false, 4000);
-  expect(out.state == CRUISE_STATE_OFF && sentRelease(out), "auto: moved speed releases");
-  expect(out.outcome == CRUISE_OUTCOME_RELEASED_CANCEL, "auto: moved speed is a cancel");
+  out = cruiseControlStep(rt, s, in, false, false, 4000);  // inside engage grace
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: grace keeps a fresh hold");
+  out = cruiseControlStep(rt, s, in, false, false, 4600);  // deviation starts
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: first moved tick still holds");
+  out = cruiseControlStep(rt, s, in, false, false, 5600);  // 1 s outside
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: short deviation still holds");
+  out = cruiseControlStep(rt, s, in, false, false, 6000);  // >1.2 s outside
+  expect(out.state == CRUISE_STATE_OFF && sentRelease(out), "auto: sustained speed change releases");
+  expect(out.outcome == CRUISE_OUTCOME_RELEASED_CANCEL, "auto: sustained speed change is a cancel");
+}
+
+void testAutomaticHoldIgnoresTransientDip() {
+  CruiseRuntime rt = fresh();
+  CruiseSettings s = baseSettings();
+  s.holdTimeDeciS = 20;
+  CruiseInputs in = baseInputs();
+  in.avgInputCurrent = 10.0F;
+  cruiseControlStep(rt, s, in, false, false, 1000);
+  cruiseControlStep(rt, s, in, false, false, 3000);  // armed
+  in.avgInputCurrent = 0.0F;
+  cruiseControlStep(rt, s, in, false, false, 3100);  // engage on release
+  in.avgInputCurrent = 10.0F;
+
+  in.speedKmh = 16.5F;  // a bump or short coast, outside the 3 km/h margin
+  CruiseOutput out = cruiseControlStep(rt, s, in, false, false, 5000);
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: transient dip keeps cruise");
+  in.speedKmh = 20.0F;
+  out = cruiseControlStep(rt, s, in, false, false, 5500);
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: recovering speed keeps cruise");
 }
 
 void testAutomaticHoldResetsWhenSpeedMoves() {
@@ -419,6 +450,9 @@ void testAutomaticHoldResetsWhenSpeedMoves() {
   out = cruiseControlStep(rt, s, in, false, false, 1500);
   expect(out.state == CRUISE_STATE_HOLDING, "auto: restarted hold still waiting");
   out = cruiseControlStep(rt, s, in, false, false, 2500);
+  expect(out.state == CRUISE_STATE_ARMED && !out.send, "auto: restarted window arms");
+  in.avgInputCurrent = 0.0F;
+  out = cruiseControlStep(rt, s, in, false, false, 2600);
   expect(out.state == CRUISE_STATE_ACTIVE && sentEngage(out), "auto: engages from the restarted window");
 }
 
@@ -529,6 +563,7 @@ int main() {
   testSpeedDropReleases();
   testBrakeReleases();
   testAutomaticHoldEngages();
+  testAutomaticHoldIgnoresTransientDip();
   testAutomaticHoldResetsWhenSpeedMoves();
   testAutomaticHoldNeedsDriveCurrent();
   testNoReleaseWhenInactive();

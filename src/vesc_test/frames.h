@@ -156,11 +156,31 @@ struct ControllerState {
   // currents above have no read-back field, which is why they are kept apart.
   McconfTemp mcconf = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 1.0F, 0.254F};
 
+  // Master-firmware appconf layout: 290 serialized bytes, signature at 0,
+  // ADC buttons at 111. The display only flips bit 0 (cruise button).
+  static constexpr size_t kAppConfBytes = 290;
+  uint8_t appConf[kAppConfBytes] = {};
+  uint16_t appConfLen = kAppConfBytes;
+
   bool adcDetached = false;
+  // Real VESC firmware forces cc_button false when app_conf.adc.buttons bit 0
+  // is clear. Default it off, like a fresh VESC, so the display's appconf
+  // read-modify-write path is exercised.
+  bool cruiseButtonEnabled = false;
   bool cruiseHeld = false;
   int32_t cruiseErpm = 0;
   int32_t cruiseSpeedMmPerS = 0;
 
+  ControllerState() { resetAppConf(); }
+  void resetAppConf() {
+    memset(appConf, 0, sizeof(appConf));
+    appConfLen = kAppConfBytes;
+    appConf[0] = 0xA7;
+    appConf[1] = 0x0A;
+    appConf[2] = 0x3A;
+    appConf[3] = 0x03;
+    appConf[111] = 0x00;  // factory default: cruise button disabled
+  }
   void reset() { *this = ControllerState(); }
 
   // Replaces the instantaneous sample with the held cruise setpoint. A released
@@ -280,6 +300,13 @@ struct ControllerState {
         if (enable != 0) {
           // Capture only on the transition into hold: re-sending engage must not
           // move the setpoint to a speed the fake is already holding.
+          if (!cruiseButtonEnabled) {
+            // Matches app_adc.c: `if (!(config.buttons >> 0 & 1)) cc_button = false`.
+            cruiseHeld = false;
+            cruiseErpm = 0;
+            cruiseSpeedMmPerS = 0;
+            return true;
+          }
           if (!cruiseHeld) {
             cruiseHeld = true;
             cruiseErpm = currentErpm;
@@ -367,6 +394,21 @@ inline size_t frame(const uint8_t *payload, size_t length, uint8_t *out, size_t 
   return i;
 }
 
+// 16-bit length framing, used by VESC for payloads above 255 bytes.
+inline size_t frame16(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (!payload || length == 0 || length > 0xFFFFu || capacity < length + 6) return 0;
+  size_t i = 0;
+  out[i++] = 3;
+  out[i++] = uint8_t(length >> 8);
+  out[i++] = uint8_t(length & 0xFF);
+  for (size_t n = 0; n < length; n++) out[i++] = payload[n];
+  const uint16_t crc = crc16(payload, length);
+  out[i++] = uint8_t(crc >> 8);
+  out[i++] = uint8_t(crc & 0xFF);
+  out[i++] = 3;
+  return i;
+}
+
 inline size_t makeValuesFrame(uint8_t *out, size_t capacity, const Sample &sample, const Totals &totals) {
   uint8_t payload[59];
   size_t i = 0;
@@ -415,6 +457,15 @@ inline size_t makeSetupFrame(uint8_t *out, size_t capacity, const Sample &sample
   payload[i++] = sample.fault;
   payload[i++] = 0;  // controller id
   payload[i++] = 1;  // VESCs on the CAN bus
+  return frame(payload, i, out, capacity);
+}
+
+inline size_t makeLispPrintFrame(uint8_t *out, size_t capacity, const char *text) {
+  uint8_t payload[160];
+  size_t i = 0;
+  payload[i++] = 135;  // COMM_LISP_PRINT
+  for (const char *p = text; p && *p && i + 1 < sizeof(payload); p++) payload[i++] = uint8_t(*p);
+  payload[i++] = 0;
   return frame(payload, i, out, capacity);
 }
 
@@ -468,6 +519,19 @@ inline size_t makeMcconfTempFrame(uint8_t *out, size_t capacity,
                                   float inCurrentMin, float inCurrentMax) {
   McconfTemp mcconf = {currentMinScale, currentMaxScale, minErpm, maxErpm, minDuty, maxDuty, wattMin, wattMax, inCurrentMin, inCurrentMax};
   return makeMcconfTempFrame(out, capacity, mcconf);
+}
+
+inline size_t makeAppConfFrame(uint8_t *out, size_t capacity, const uint8_t *serialized, size_t length) {
+  uint8_t payload[1 + 300];
+  if (!serialized || length == 0 || length > 300) return 0;
+  payload[0] = 17;  // COMM_GET_APPCONF
+  memcpy(payload + 1, serialized, length);
+  return length + 1 > 255 ? frame16(payload, length + 1, out, capacity) : frame(payload, length + 1, out, capacity);
+}
+
+inline size_t makeAppConfAckFrame(uint8_t *out, size_t capacity) {
+  const uint8_t payload[] = {149};  // COMM_SET_APPCONF_NO_STORE
+  return frame(payload, sizeof(payload), out, capacity);
 }
 
 // Alias names, so the sender speaks whichever spelling a caller uses.

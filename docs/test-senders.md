@@ -101,11 +101,12 @@ it would from a UART. `COMM_FORWARD_CAN` requests are unwrapped first: the inner
 command starts at `payload + 2`, and only that inner payload is parsed, so a
 CAN-wrapped profile write applies the same expression as a direct one.
 
-Five commands are answered — `COMM_GET_VALUES` (4), `COMM_GET_VALUES_SETUP`
-(47), `COMM_FW_VERSION` (0, reported as 6.2), `COMM_GET_MCCONF_TEMP` (91) and
-`COMM_LISP_REPL_CMD` (138). Anything else is counted as ignored and left
-unanswered, which is also what a real VESC does for commands it does not
-implement.
+The fake answers `COMM_GET_VALUES` (4), `COMM_GET_VALUES_SETUP` (47),
+`COMM_FW_VERSION` (0, reported as 6.2), `COMM_GET_MCCONF_TEMP` (91),
+`COMM_GET_MCCONF` (14, long 16-bit frame), `COMM_GET_APPCONF` (17, long frame),
+`COMM_SET_APPCONF_NO_STORE` (149), and `COMM_LISP_REPL_CMD` (138). Anything else
+is counted as ignored and left unanswered, which is also what a real VESC does
+for commands it does not implement.
 
 ### Profiles and cruise over LispBM
 
@@ -123,8 +124,11 @@ on the next `0x02` instead of dropping a valid packet.
 
 `COMM_GET_MCCONF_TEMP` reports the shadow back in the fields a real controller
 has: current scales, eRPM limits, duty limits, watt limits and input-current
-limits. `foc-fw-current-max` and `l-current-max` have no read-back field, which
-is why they appear only on the sender's screen.
+limits, followed by motor poles, gear ratio and wheel diameter. `COMM_GET_MCCONF`
+returns a full 16-bit-frame battery/drivetrain block, and the appconf commands
+let the display exercise its automatic ADC cruise-button bit read-modify-write.
+`foc-fw-current-max` and `l-current-max` have no read-back field, which is why
+they appear only on the sender's screen.
 
 Cruise uses the ADC application's own hold, exactly as the dashboard sends it:
 

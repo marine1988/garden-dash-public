@@ -17,6 +17,11 @@ struct FirmwareChangelogEntry {
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
         "2026-10-22",
+        "Cruise waits for release",
+        "Cruise arms after the hold, engages on throttle release, and auto-enables the ADC bit.",
+    },
+    {
+        "2026-10-22",
         "Battery and speed from VESC",
         "Uses the VESC's charge level and drivetrain setup instead of asking first.",
     },
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-22",
         "Cruise by steady speed",
         "Cruise engages after a steady-speed hold; no button and no VESC package.",
-    },
-    {
-        "2026-10-21",
-        "Profile and cruise fixes",
-        "Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.",
     },
 };
 

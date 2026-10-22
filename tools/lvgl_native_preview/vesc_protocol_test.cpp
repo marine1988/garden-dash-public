@@ -145,6 +145,42 @@ void testSetupValues() {
   expect(!vescParseSetupValues(payload, 54, ignored), "SETUP rejects a short payload");
 }
 
+void testMcconfConfig() {
+  uint8_t payload[493] = {};
+  payload[0] = VESC_COMM_GET_MCCONF;
+  payload[1] = 0x1C;
+  payload[2] = 0x17;
+  payload[3] = 0xAF;
+  payload[4] = 0xEE;
+  payload[466] = 0;   // Li-ion
+  payload[467] = 13;  // 13S
+  size_t ahIndex = 468;
+  vescAppendFloat32Auto(payload, 20.0F, ahIndex);
+  VescConfigValues values = {};
+  expect(vescParseMcconfConfig(payload, sizeof(payload), values), "full mcconf battery tail accepted");
+  expect(values.batteryType == 0, "mcconf battery type");
+  expect(values.batteryCells == 13, "mcconf battery cells");
+  expectNear(values.batteryAh, 20.0F, "mcconf battery Ah");
+
+  uint8_t oldPayload[482] = {};
+  memcpy(oldPayload, payload, 5);
+  oldPayload[461] = 1;   // LiFePO4
+  oldPayload[462] = 16;
+  size_t oldAhIndex = 463;
+  vescAppendFloat32Auto(oldPayload, 30.0F, oldAhIndex);
+  expect(vescParseMcconfConfig(oldPayload, sizeof(oldPayload), values), "6.02 mcconf tail accepted");
+  expect(values.batteryType == 1 && values.batteryCells == 16, "6.02 battery fields");
+  expectNear(values.batteryAh, 30.0F, "6.02 battery Ah");
+
+  VescConfigValues ignored = {};
+  expect(!vescParseMcconfConfig(nullptr, 493, ignored), "mcconf config rejects null");
+  payload[467] = 3;  // factory-default 3S is not a plausible scooter pack
+  expect(!vescParseMcconfConfig(payload, sizeof(payload), ignored), "mcconf rejects 3S default");
+  payload[467] = 13;
+  payload[1] = 0;
+  expect(!vescParseMcconfConfig(payload, sizeof(payload), ignored), "mcconf rejects bad signature");
+}
+
 void testFwVersion() {
   const uint8_t payload[] = {VESC_COMM_FW_VERSION, 6, 2};
   uint8_t major = 0;
@@ -304,6 +340,19 @@ void testProfileFrame() {
          "profile frame refuses to fit in 16 bytes (regression guard)");
 }
 
+void testLongFrames() {
+  uint8_t payload[300] = {};
+  payload[0] = VESC_COMM_GET_APPCONF;
+  for (int i = 1; i < 300; i++) payload[i] = (uint8_t)i;
+  uint8_t frame[320] = {};
+  const size_t n = vescBuildFrame(payload, sizeof(payload), frame, sizeof(frame));
+  expect(n == 306, "16-bit frame length");
+  expect(frame[0] == 3 && frame[1] == 1 && frame[2] == 44, "16-bit header carries 300");
+  expect(frame[n - 1] == 3, "16-bit frame stop byte");
+  const uint16_t crc = uint16_t(uint16_t(frame[n - 3]) << 8) | frame[n - 2];
+  expect(crc == vescCrc16(payload, sizeof(payload)), "16-bit frame CRC");
+}
+
 void testParseMcconfTemp() {
   uint8_t payload[64] = {};
   payload[0] = VESC_COMM_GET_MCCONF_TEMP;
@@ -343,12 +392,14 @@ int main() {
   testCrc();
   testGetValues();
   testSetupValues();
+  testMcconfConfig();
   testFwVersion();
   testFraming();
   testControlFraming();
   testFloat32Auto();
   testLispPayload();
   testProfileFrame();
+  testLongFrames();
   testParseMcconfTemp();
   if (failures == 0) printf("vesc_protocol: all checks passed\n");
   return failures == 0 ? 0 : 1;
