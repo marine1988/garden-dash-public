@@ -409,11 +409,11 @@ void testAutomaticHoldEngages() {
   expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: grace keeps a fresh hold");
   out = cruiseControlStep(rt, s, in, false, false, 4600);  // deviation starts
   expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: first moved tick still holds");
-  out = cruiseControlStep(rt, s, in, false, false, 5600);  // 1 s outside
-  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: short deviation still holds");
-  out = cruiseControlStep(rt, s, in, false, false, 6000);  // >1.2 s outside
-  expect(out.state == CRUISE_STATE_OFF && sentRelease(out), "auto: sustained speed change releases");
-  expect(out.outcome == CRUISE_OUTCOME_RELEASED_CANCEL, "auto: sustained speed change is a cancel");
+  out = cruiseControlStep(rt, s, in, false, false, 4900);  // 0.3 s faster than target
+  expect(out.state == CRUISE_STATE_ACTIVE && !out.send, "auto: brief acceleration still holds");
+  out = cruiseControlStep(rt, s, in, false, false, 5200);  // >0.5 s faster
+  expect(out.state == CRUISE_STATE_OFF && sentRelease(out), "auto: re-acceleration releases");
+  expect(out.outcome == CRUISE_OUTCOME_RELEASED_CANCEL, "auto: re-acceleration is a cancel");
 }
 
 void testAutomaticHoldIgnoresTransientDip() {

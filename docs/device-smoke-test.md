@@ -98,8 +98,8 @@ and any failed step. Test both original and alternate CYD panels.
 - [ ] Cruise has no engage button. Holding a steady speed for the configured
       hold time shows `HOLDING`, then `ARMED`; releasing the throttle engages
       and the dashboard shows a green `CRUISE <speed>` chip.
-- [ ] Braking, a real speed change, a stop below the minimum, a fault or link
-      loss releases the cruise and hides the chip.
+- [ ] Braking, re-applying the throttle, a sustained speed change, a stop below
+      the minimum, a fault or link loss releases the cruise and hides the chip.
 - [ ] The cruise page shows state, hold time and how to cancel; page 1 still
       edits enable, hold time, min and max speed.
 

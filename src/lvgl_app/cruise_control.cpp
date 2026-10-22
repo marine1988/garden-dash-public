@@ -33,6 +33,7 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
     rt.holdSpeedKmh = 0.0F;
     rt.activeSinceMs = 0;
     rt.speedOutSinceMs = 0;
+    rt.speedOutDirection = 0;
   };
 
   // Hands a live cruise back explicitly: the override is cleared and the ADC
@@ -98,9 +99,15 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
     // away from the captured target. The display cannot read the throttle pin,
     // so this is its equivalent of the package's "throttle moved". Require the
     // deviation to persist so a single bump does not cancel a valid hold.
-    if (fabsf(in.speedKmh - (float)rt.targetKmh) > kCruiseOverspeedMarginKmh) {
-      if (rt.speedOutSinceMs == 0) rt.speedOutSinceMs = nowMs ? nowMs : 1;
-      if ((uint32_t)(nowMs - rt.speedOutSinceMs) >= kCruiseSpeedCancelMs) {
+    const float targetDelta = in.speedKmh - (float)rt.targetKmh;
+    if (fabsf(targetDelta) > kCruiseOverspeedMarginKmh) {
+      const int8_t direction = targetDelta > 0.0F ? 1 : -1;
+      if (rt.speedOutSinceMs == 0 || rt.speedOutDirection != direction) {
+        rt.speedOutSinceMs = nowMs ? nowMs : 1;
+        rt.speedOutDirection = direction;
+      }
+      const uint32_t required = direction > 0 ? kCruiseAccelCancelMs : kCruiseSpeedCancelMs;
+      if ((uint32_t)(nowMs - rt.speedOutSinceMs) >= required) {
         release(CRUISE_OUTCOME_RELEASED_CANCEL);
         return out;
       }
@@ -108,6 +115,7 @@ CruiseOutput cruiseControlStep(CruiseRuntime &rt, const CruiseSettings &settings
       return out;
     }
     rt.speedOutSinceMs = 0;
+    rt.speedOutDirection = 0;
 
     // Nothing to send: the ADC application holds the setpoint every cycle.
     out.state = rt.state;

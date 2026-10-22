@@ -102,6 +102,7 @@ struct CruiseRuntime {
   float holdSpeedKmh;    // speed the window is following
   uint32_t activeSinceMs;   // when the ADC hold was requested
   uint32_t speedOutSinceMs; // first tick speed left the target window, 0 if inside
+  int8_t speedOutDirection; // +1 above target, -1 below, 0 inside
 };
 
 // The two LispBM expressions the VESC ADC application understands. Engage keeps
@@ -138,6 +139,9 @@ constexpr uint32_t kCruiseEngageGraceMs = 1500;
 // A real throttle pull or coast keeps speed outside the target window; a
 // one-sample dip from a bump or a gear change should not release the cruise.
 constexpr uint32_t kCruiseSpeedCancelMs = 1200;
+// Re-applying the throttle makes speed rise now; the VESC ADC branch has
+// already handed control back, so do not leave the CRUISE chip up for long.
+constexpr uint32_t kCruiseAccelCancelMs = 500;
 
 // Applies one cycle and returns what, if anything, to send. Engagement is
 // automatic: `requestEngage` is retained for API compatibility but no button

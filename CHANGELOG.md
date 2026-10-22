@@ -22,7 +22,7 @@ languages is not worth hand-maintaining.
 
 ## 2026-10-22 — Cruise waits for release
 
-Cruise arms after the hold, engages on throttle release, and auto-enables the ADC bit.
+Cruise arms after the hold, engages on release, and cancels on re-acceleration.
 
 ## 2026-10-22 — Battery and speed from VESC
 

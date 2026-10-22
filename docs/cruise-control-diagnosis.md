@@ -207,8 +207,9 @@ steady-speed timer:
 - A brake (battery current below -5 A), a sustained speed change of more than
   3 km/h, a stop below the minimum, an overspeed, a fault, a dead link or
   switching cruise off sends `(app-adc-override 3 0)` and returns to `OFF`.
-  A short dip after engage is ignored for 1.5 s, and a speed deviation must
-  persist for 1.2 s before it cancels.
+  A short dip after engage is ignored for 1.5 s. A speed drop must persist for
+  1.2 s, while re-applying the throttle (speed rising above the target) cancels
+  after 0.5 s.
 - The dashboard shows a green `CRUISE <speed>` chip while the state is `ACTIVE`.
 - The display cannot read the throttle pin, so "steady throttle" is approximated
   by steady speed plus positive drive current. A rider who holds a constant
