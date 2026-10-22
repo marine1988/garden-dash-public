@@ -20,6 +20,10 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
+## 2026-10-22 — Keep the VESC link stable
+
+Long config exchanges are gone; the ADC cruise button is a one-time VESC Tool setting.
+
 ## 2026-10-22 — Cruise waits for release
 
 Cruise arms after the hold, engages on release, and cancels on re-acceleration.

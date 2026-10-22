@@ -1116,8 +1116,10 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
   // showing the controller's own numbers. Runs last so it cannot delay the
   // telemetry the dashboard draws from.
   vescProfileStep(now, rpmPerKmh);
-  vescServiceAppConf(now);
-  vescServiceConfigQuery(now);
+  // The full appconf/mcconf exchanges are deliberately not run here. On real
+  // VESCs the large configuration reply could desynchronise the UART/BLE stream
+  // and the appconf write can reconfigure the ADC/button pins. The short
+  // setup-value and MCCONF_TEMP polls above are the stable path.
   return CONTROLLER_POLL_UPDATED;
 }
 

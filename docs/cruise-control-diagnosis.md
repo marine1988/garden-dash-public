@@ -220,15 +220,16 @@ steady-speed timer:
 
 - The VESC must be in the **ADC** application, with throttle on ADC1 and brake
   on ADC2, because the native cruise holds the ADC application's captured eRPM.
-- **App → ADC → "Cruise control button"** (bit 0 of `app_conf.adc.buttons`) is
-  set automatically in RAM by the display when the VESC app-config layout is
-  known. The write is `COMM_GET_APPCONF` → set bit 0 → `COMM_SET_APPCONF_NO_STORE`
-  → read back and verify. The VESC flash is not touched. If the layout is
-  unknown, enable the bit once in VESC Tool; a missing bit makes the ADC
-  application force `cc_button` false (`app_adc.c:330`) and no cruise holds.
+- **App → ADC → "Cruise control button"** (bit 0 of `app_conf.adc.buttons`)
+  must be enabled once in VESC Tool. A missing bit makes the ADC application
+  force `cc_button` false (`app_adc.c:330`) and no cruise holds. The display no
+  longer rewrites the VESC app configuration: on real controllers that exchange
+  could reconfigure the UART/button pins and drop the link.
 - Remove or disable the separate `vesc_cruise_control` package: it also watches
   the ADC and would fight the display's native cruise. The display does not need
   it.
-- The VESC's own battery/drivetrain setup is read automatically: full
-  `COMM_GET_MCCONF` for battery type/cells/Ah, and `COMM_GET_MCCONF_TEMP` for
-  wheel diameter, pole count and gearing.
+- The VESC's drivetrain setup is read with the short `COMM_GET_MCCONF_TEMP`
+  reply (wheel diameter, pole count and gearing). Battery percentage comes from
+  the short `COMM_GET_VALUES_SETUP` reply when the VESC battery configuration is
+  valid; series/capacity remain display settings. The full `COMM_GET_MCCONF`
+  long exchange is not requested automatically.

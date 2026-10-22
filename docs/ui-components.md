@@ -266,10 +266,9 @@ rider releases the throttle, because the VESC ADC branch captures its setpoint
 at throttle rest. It releases on a brake, a sustained speed change, a stop below
 the minimum, an overspeed, a fault, a lost link or switching cruise off. Page 1
 edits enable, hold time, minimum and maximum speed; page 2 shows `STATE`,
-`HOLD TIME` and how to cancel. When the VESC app-config layout is known, the
-display also sets the ADC "Cruise control button" bit in RAM at connection, so
-the rider does not have to enable it in VESC Tool. No separate cruise package is
-used.
+`HOLD TIME` and how to cancel. The VESC ADC "Cruise control button" must be
+enabled once in VESC Tool; the display deliberately does not rewrite the VESC
+app configuration. No separate cruise package is used.
 
 Profiles is three pages. Slots (page 1) lists the three named profiles: tapping
 one selects it for editing, and the badge follows the selection. Limits (page 2)

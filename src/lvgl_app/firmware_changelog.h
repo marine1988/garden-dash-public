@@ -17,6 +17,11 @@ struct FirmwareChangelogEntry {
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
         "2026-10-22",
+        "Keep the VESC link stable",
+        "Long config exchanges are gone; the ADC cruise button is a one-time VESC Tool setting.",
+    },
+    {
+        "2026-10-22",
         "Cruise waits for release",
         "Cruise arms after the hold, engages on release, and cancels on re-acceleration.",
     },
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-22",
         "VESC-only controller link",
         "FarDriver support, its BLE stack and test sender are gone; only VESC remains.",
-    },
-    {
-        "2026-10-22",
-        "Cruise by steady speed",
-        "Cruise engages after a steady-speed hold; no button and no VESC package.",
     },
 };
 
