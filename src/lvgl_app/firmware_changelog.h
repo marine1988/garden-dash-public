@@ -17,6 +17,11 @@ struct FirmwareChangelogEntry {
 static const FirmwareChangelogEntry kFirmwareChangelog[] = {
     {
         "2026-10-22",
+        "Battery and speed from VESC",
+        "Uses the VESC's charge level and drivetrain setup instead of asking first.",
+    },
+    {
+        "2026-10-22",
         "VESC-only controller link",
         "FarDriver support, its BLE stack and test sender are gone; only VESC remains.",
     },
@@ -29,11 +34,6 @@ static const FirmwareChangelogEntry kFirmwareChangelog[] = {
         "2026-10-21",
         "Profile and cruise fixes",
         "Profiles replay after reconnect; the dashboard badge cycles them and shows cruise.",
-    },
-    {
-        "2026-10-14",
-        "VESC link on one connector",
-        "A garden_usb build puts the VESC link on the power header's TX/RX: one cable, no log.",
     },
 };
 

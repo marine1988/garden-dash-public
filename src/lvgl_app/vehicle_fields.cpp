@@ -534,7 +534,7 @@ void saveVehicleInputValue(int field, const char *text) {
         if (telemetrySpeedFromController()) {
           speedCalibrationPercent = constrain(atoi(text), 50, 200);
         } else {
-          wheelDiameterMm = constrain(atoi(text), 300, 1000);
+          wheelDiameterMm = constrain(atoi(text), 100, 2000);
         }
         break;
       case VEHICLE_FIELD_VESC_BAUD:

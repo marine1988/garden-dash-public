@@ -78,6 +78,8 @@ struct VescSetupValues {
   float distanceAbsM;
   float voltage;
   float tempFet;
+  float batteryLevel;       // 0..1, from the VESC's own battery settings
+  bool batteryLevelValid;   // false when the VESC has no usable battery config
 };
 
 uint16_t vescCrc16(const uint8_t *buf, size_t len);
@@ -130,6 +132,12 @@ struct VescMcconfTemp {
   float wattMax;
   float inCurrentMin;
   float inCurrentMax;
+  // Present on current VESC firmware after the ten profile fields. Older
+  // replies end before them, so `setupValid` says whether they can be trusted.
+  uint8_t motorPoles;
+  float gearRatio;
+  float wheelDiameterM;
+  bool setupValid;
 };
 
 // VESC's compact float: a 24-bit significand with an 8-bit exponent folded into

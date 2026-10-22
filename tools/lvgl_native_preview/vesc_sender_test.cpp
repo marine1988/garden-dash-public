@@ -9,7 +9,7 @@ namespace {
 // reply, worked out from the protocol description rather than from either
 // implementation here.
 constexpr uint16_t kStationaryValuesCrc = 0x594A;
-constexpr uint16_t kStationarySetupCrc = 0x8D56;
+constexpr uint16_t kStationarySetupCrc = 0x573A;
 // Covers the firmware-version payload including the device name, so renaming
 // the fixture changes this value -- and the frame length, when the new name is
 // a different length -- rather than passing silently.
@@ -41,8 +41,11 @@ int main() {
     return 1;
   }
   length = fake_vesc::makeSetupFrame(frame, sizeof(frame), fake_vesc::kStationary, {});
+  const uint16_t setupCrc =
+      length >= 3 ? uint16_t(uint16_t(frame[length - 3]) << 8) | frame[length - 2] : 0;
   if (length != 63 || !framingOk(frame, length, 47, kStationarySetupCrc)) {
-    std::fprintf(stderr, "VESC sender: stationary GET_VALUES_SETUP frame mismatch (len %zu)\n", length);
+    std::fprintf(stderr, "VESC sender: stationary GET_VALUES_SETUP frame mismatch (len %zu, crc 0x%04X)\n",
+                 length, setupCrc);
     return 1;
   }
   length = fake_vesc::makeFwVersionFrame(frame, sizeof(frame));
@@ -86,7 +89,8 @@ int main() {
       return 1;
     }
     if (!near(setup.speedMs, sample.speedMmPerS / 1000.0F, 0.002F) ||
-        !near(setup.distanceAbsM, totals.odometerMm / 1000.0F, 0.002F)) {
+        !near(setup.distanceAbsM, totals.odometerMm / 1000.0F, 0.002F) ||
+        !near(setup.batteryLevel, 0.75F, 0.001F)) {
       std::fprintf(stderr, "VESC sender: setup values decoded wrong at %u ms\n", unsigned(ms));
       return 1;
     }

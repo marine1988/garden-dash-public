@@ -20,6 +20,10 @@ the 320x240 panel -- or the generator will truncate them and say so. Entries are
 translated the way the rest of the interface is, because a changelog in six
 languages is not worth hand-maintaining.
 
+## 2026-10-22 — Battery and speed from VESC
+
+Uses the VESC's charge level and drivetrain setup instead of asking first.
+
 ## 2026-10-22 — VESC-only controller link
 
 FarDriver support, its BLE stack and test sender are gone; only VESC remains.

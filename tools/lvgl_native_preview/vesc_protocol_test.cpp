@@ -138,6 +138,8 @@ void testSetupValues() {
   expectNear(v.speedMs, 8.125F, "setup speedMs");
   expectNear(v.voltage, 47.9F, "setup voltage");
   expectNear(v.distanceAbsM, 45678.0F, "setup distanceAbsM");
+  expectNear(v.batteryLevel, 0.78F, "setup batteryLevel");
+  expect(v.batteryLevelValid, "setup batteryLevel is usable");
 
   VescSetupValues ignored = {};
   expect(!vescParseSetupValues(payload, 54, ignored), "SETUP rejects a short payload");
@@ -309,6 +311,7 @@ void testParseMcconfTemp() {
   const float values[] = {0.5F, 1.0F, -3000.0F, 3000.0F, -1.0F, 1.0F, -10000.0F, 10000.0F, -30.0F, 30.0F};
   for (float value : values) vescAppendFloat32Auto(payload, value, i);
 
+  const size_t profileEnd = i;
   VescMcconfTemp out = {};
   expect(vescParseMcconfTemp(payload, i, out), "MCCONF_TEMP reply accepted");
   expectNear(out.currentMinScale, 0.5F, "mcconf brake scale");
@@ -316,9 +319,19 @@ void testParseMcconfTemp() {
   expectNear(out.minErpm, -3000.0F, "mcconf reverse limit");
   expectNear(out.maxErpm, 3000.0F, "mcconf forward limit");
   expectNear(out.inCurrentMax, 30.0F, "mcconf battery current max");
+  expect(!out.setupValid, "old MCCONF_TEMP without setup values is still accepted");
+
+  payload[i++] = 14;
+  vescAppendFloat32Auto(payload, 1.0F, i);
+  vescAppendFloat32Auto(payload, 0.254F, i);
+  expect(vescParseMcconfTemp(payload, i, out), "extended MCCONF_TEMP reply accepted");
+  expect(out.setupValid, "extended MCCONF_TEMP reports setup values");
+  expect(out.motorPoles == 14, "mcconf motor poles");
+  expectNear(out.gearRatio, 1.0F, "mcconf gear ratio");
+  expectNear(out.wheelDiameterM, 0.254F, "mcconf wheel diameter");
 
   VescMcconfTemp ignored = {};
-  expect(!vescParseMcconfTemp(payload, i - 1, ignored), "MCCONF_TEMP rejects a short reply");
+  expect(!vescParseMcconfTemp(payload, profileEnd - 1, ignored), "MCCONF_TEMP rejects a short reply");
   expect(!vescParseMcconfTemp(nullptr, i, ignored), "MCCONF_TEMP rejects null");
   payload[0] = VESC_COMM_GET_VALUES;
   expect(!vescParseMcconfTemp(payload, i, ignored), "MCCONF_TEMP rejects a wrong command id");

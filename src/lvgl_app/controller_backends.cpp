@@ -39,6 +39,11 @@ bool setupValuesProbed = false;
 VescSetupValues liveSetup = {};
 bool liveSetupValid = false;
 uint8_t setupFailures = 0;
+// The VESC's own setup values are the source of truth for wheel diameter, pole
+// count and gearing. Adopt them once per connection so a fresh display needs no
+// manual drivetrain entry, while a later manual correction is not overwritten
+// every few seconds.
+bool drivetrainAdoptedFromVesc = false;
 
 const uint32_t VESC_REPLY_TIMEOUT_MS = 100;
 
@@ -189,6 +194,7 @@ void resetVescSession() {
   liveSetup = {};
   liveSetupValid = false;
   setupFailures = 0;
+  drivetrainAdoptedFromVesc = false;
   lispSent = false;
   pendingCruiseLispActive = false;
   pendingCruiseLisp[0] = '\0';
@@ -492,11 +498,15 @@ void fillVescSample(ControllerSample &out, uint32_t now) {
   out.values.avgSpeedKmh = out.values.uptimeSeconds > 0
                                ? out.values.tripKm * 3600.0F / out.values.uptimeSeconds
                                : 0.0F;
-  out.values.batteryPercent = batterySocFromVoltage(out.values.voltage);
+  const bool vescBatteryLevel = liveSetupValid && liveSetup.batteryLevelValid;
+  out.values.batteryPercent =
+      vescBatteryLevel ? constrain((int)lroundf(liveSetup.batteryLevel * 100.0F), 1, 100)
+                       : batterySocFromVoltage(out.values.voltage);
   out.available = TELEMETRY_FIELDS_DASHBOARD | TELEMETRY_FIELD_FAULT | TELEMETRY_FIELD_MOTOR_CURRENT |
                   TELEMETRY_FIELD_DUTY | TELEMETRY_FIELD_PHASE_VOLTAGE;
   out.derived = TELEMETRY_FIELD_PHASE_VOLTAGE | TELEMETRY_FIELD_POWER | TELEMETRY_FIELD_AVG_SPEED |
-                TELEMETRY_FIELD_UPTIME | TELEMETRY_FIELD_BATTERY_SOC;
+                TELEMETRY_FIELD_UPTIME;
+  if (!vescBatteryLevel) out.derived |= TELEMETRY_FIELD_BATTERY_SOC;
   if (!liveSetupValid)
     out.derived |= TELEMETRY_FIELD_SPEED | TELEMETRY_FIELD_TRIP_DISTANCE | TELEMETRY_FIELD_ODOMETER;
   out.faultCode = (uint8_t)vescData.faultCode;
@@ -559,6 +569,22 @@ void vescCruiseSendLisp(const char *expression) {
   vescQueueCruiseLisp(expression);
 }
 
+// COMM_GET_MCCONF_TEMP carries the same si_* figures the VESC uses to turn
+// eRPM into road speed. Adopt them once per connection, before the first
+// profile refresh has a chance to run again.
+void adoptVescDrivetrain(const VescMcconfTemp &setup) {
+  if (!setup.setupValid || drivetrainAdoptedFromVesc) return;
+  const int polePairs = constrain((int)lroundf(setup.motorPoles / 2.0F), 1, 64);
+  const int wheelMm = constrain((int)lroundf(setup.wheelDiameterM * 1000.0F), 50, 2000);
+  const int ratio = constrain((int)lroundf(setup.gearRatio * 100.0F), 1, 20000);
+  vescMotorPolePairs = (uint8_t)polePairs;
+  wheelDiameterMm = (uint16_t)wheelMm;
+  vescDriveRatioHundredths = (uint16_t)ratio;
+  drivetrainAdoptedFromVesc = true;
+  gardenLogf("VESC drivetrain: %u poles, %.2f:1, %u mm\n", (unsigned)setup.motorPoles,
+             setup.gearRatio, (unsigned)wheelMm);
+}
+
 // Asks the controller for its current profile numbers and publishes them. This
 // is the "display reads from the VESC" half: the values page shows these, so it
 // reports what the controller holds, not what the display last sent. Returns
@@ -570,6 +596,7 @@ bool vescProfileRefresh() {
   if (len <= 0) return false;
   VescMcconfTemp parsed = {};
   if (!vescParseMcconfTemp(msg, (size_t)len, parsed)) return false;
+  adoptVescDrivetrain(parsed);
   portENTER_CRITICAL(&profileMux);
   vescLiveProfile = parsed;
   vescLiveProfileValid = true;
@@ -738,6 +765,7 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
       vescConnected = false;
       setupValuesSupported = false;
       liveSetupValid = false;
+      drivetrainAdoptedFromVesc = false;
       vescFwMajor = 0;
       vescFwMinor = 0;
       // The link is gone, so the display can neither hold nor release a
@@ -778,6 +806,7 @@ ControllerPollResult vescBackendPoll(ControllerSample &out) {
     setupValuesSupported = false;
     liveSetupValid = false;
     setupFailures = 0;
+    drivetrainAdoptedFromVesc = false;
     countersFromSetup = false;
     // A fresh link starts with cruise idle: whatever was commanded belonged to
     // the previous session and must not resume silently.

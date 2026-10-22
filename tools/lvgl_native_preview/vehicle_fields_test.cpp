@@ -103,9 +103,9 @@ void testNumericClamps() {
   // percentage, and the ranges are completely different.
   previewSetTelemetryLink(LINK_LOST);
   expect(!telemetrySpeedFromController(), "a lost link means the slot is a wheel diameter");
-  expectSaved(VEHICLE_FIELD_WHEEL_MM, "100", wheelDiameterMm, 300, "wheel diameter below minimum");
+  expectSaved(VEHICLE_FIELD_WHEEL_MM, "50", wheelDiameterMm, 100, "wheel diameter below minimum");
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "700", wheelDiameterMm, 700, "wheel diameter mid-range");
-  expectSaved(VEHICLE_FIELD_WHEEL_MM, "2000", wheelDiameterMm, 1000, "wheel diameter above maximum");
+  expectSaved(VEHICLE_FIELD_WHEEL_MM, "2500", wheelDiameterMm, 2000, "wheel diameter above maximum");
 
   previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL & ~TELEMETRY_FIELD_SPEED);
   previewSetTelemetryLink(LINK_LIVE);
@@ -113,7 +113,7 @@ void testNumericClamps() {
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "10", speedCalibrationPercent, 50, "speed calibration below minimum");
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "103", speedCalibrationPercent, 103, "speed calibration mid-range");
   expectSaved(VEHICLE_FIELD_WHEEL_MM, "400", speedCalibrationPercent, 200, "speed calibration above maximum");
-  expect(wheelDiameterMm == 1000, "editing the calibration leaves the wheel diameter alone");
+  expect(wheelDiameterMm == 2000, "editing the calibration leaves the wheel diameter alone");
   previewSetTelemetryLink(LINK_LOST);
   previewSetControllerTelemetryFields(TELEMETRY_FIELDS_ALL, TELEMETRY_FIELDS_ALL);
 

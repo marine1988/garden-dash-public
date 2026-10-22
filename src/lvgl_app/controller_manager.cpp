@@ -178,6 +178,12 @@ void publishSample(ControllerSample sample) {
     batteryStatsUpdate(counters);
   }
 
+  // The VESC reports its own charge level when battery type/cells/capacity are
+  // configured in VESC Tool. Keep it distinct from the display's voltage curve
+  // so the controller's figure wins instead of being overwritten below.
+  const bool controllerSoc = telemetryHas(sample.available, TELEMETRY_FIELD_BATTERY_SOC) &&
+                             !telemetryHas(sample.derived, TELEMETRY_FIELD_BATTERY_SOC);
+
   BatteryStats battery = sample.energy.available ? batteryStatsLive() : BatteryStats{};
   if (!sample.energy.available) {
     battery.socPercent = telemetryHas(sample.available, TELEMETRY_FIELD_BATTERY_SOC)
@@ -190,7 +196,12 @@ void publishSample(ControllerSample sample) {
     const TelemetryFieldMask batteryMask = batteryAvailability(battery);
     available |= batteryMask;
     derived |= batteryMask;
-    if (battery.socPercent >= 0) {
+    if (controllerSoc) {
+      // Keep the controller's charge reading in the snapshot's battery block
+      // too, so the battery page agrees with the dashboard. Range still comes
+      // from the display's own efficiency model.
+      battery.socPercent = sample.values.batteryPercent;
+    } else if (battery.socPercent >= 0) {
       sample.values.batteryPercent = battery.socPercent;
       available |= TELEMETRY_FIELD_BATTERY_SOC;
       derived |= TELEMETRY_FIELD_BATTERY_SOC;

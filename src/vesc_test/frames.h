@@ -35,6 +35,10 @@ struct Totals {
 // limits the display actually wrote.
 struct McconfTemp {
   float currentMinScale, currentMaxScale, minErpm, maxErpm, minDuty, maxDuty, wattMin, wattMax, inCurrentMin, inCurrentMax;
+  // Current VESC firmware appends the setup values used for road speed.
+  uint8_t motorPoles;
+  float gearRatio;
+  float wheelDiameterM;
 };
 using Mcconf = McconfTemp;
 
@@ -150,7 +154,7 @@ struct ControllerState {
 
   // The fields a real COMM_GET_MCCONF_TEMP reports back. The two absolute
   // currents above have no read-back field, which is why they are kept apart.
-  McconfTemp mcconf = {};
+  McconfTemp mcconf = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 1.0F, 0.254F};
 
   bool adcDetached = false;
   bool cruiseHeld = false;
@@ -400,7 +404,7 @@ inline size_t makeSetupFrame(uint8_t *out, size_t capacity, const Sample &sample
   put32(payload, i, sample.erpm);
   put32(payload, i, sample.speedMmPerS);  // x1000 gives m/s
   put16(payload, i, sample.voltageDeci);
-  put16(payload, i, 0);  // battery level
+  put16(payload, i, 750);  // battery level: 75% from the fake's battery settings
   put32(payload, i, totals.ampHours1e4);
   put32(payload, i, totals.ampHoursCharged1e4);
   put32(payload, i, totals.wattHours1e4);
@@ -438,7 +442,7 @@ inline size_t makeLispReplyFrame(uint8_t *out, size_t capacity, const char *repl
 }
 
 inline size_t makeMcconfTempFrame(uint8_t *out, size_t capacity, const McconfTemp &mcconf = {}) {
-  uint8_t payload[1 + 10 * 4];
+  uint8_t payload[1 + 10 * 4 + 1 + 4 + 4];
   size_t i = 0;
   payload[i++] = kCommandGetMcconfTemp;
   appendFloat32Auto(payload, mcconf.currentMinScale, i);
@@ -451,6 +455,9 @@ inline size_t makeMcconfTempFrame(uint8_t *out, size_t capacity, const McconfTem
   appendFloat32Auto(payload, mcconf.wattMax, i);
   appendFloat32Auto(payload, mcconf.inCurrentMin, i);
   appendFloat32Auto(payload, mcconf.inCurrentMax, i);
+  payload[i++] = mcconf.motorPoles;
+  appendFloat32Auto(payload, mcconf.gearRatio, i);
+  appendFloat32Auto(payload, mcconf.wheelDiameterM, i);
   return frame(payload, i, out, capacity);
 }
 

@@ -114,16 +114,21 @@ settings screen, and the ride replay views.
   light/dark appearance and configurable data fields
 - **VESC telemetry** over wired UART or Bluetooth LE, with discovery and
   saved-device reconnect
-- **Battery estimates**: state of charge from resting voltage plus coulomb
-  counting, learned pack resistance, range and Wh/km, for Li-ion, LiPo or
-  LiFePO4 packs
+- **VESC data sources**: pack voltage, current and energy come straight from the
+  controller. Charge level comes from the VESC's own battery settings when they
+  are configured; otherwise the display falls back to resting voltage plus
+  coulomb counting. Speed and distance come from the VESC when it reports them;
+  otherwise eRPM is converted with wheel/pole/gear values read from the VESC.
+  Capacity, chemistry and range remain display-side estimates for Li-ion, LiPo
+  or LiFePO4 packs, with learned pack resistance and Wh/km.
 - **Ride logging** to a microSD card, with automatic start and stop, and
   on-device ride replay
 - **Signed firmware updates over Bluetooth**, with rollback-safe dual-slot OTA
 - **Auto-brightness** from the front light sensor, and an optional ambient RGB
   LED that follows the accent colour
-- **Cruise control** over a VESC link: hold to engage, and release on a tap,
-  braking below the minimum speed, a controller fault or a lost link
+- **Cruise control** over a VESC link: engages by itself after a steady-speed
+  hold, and releases on braking, a speed change, a controller fault or a lost
+  link
 - **Controller profiles**: three named setups -- Eco, Drive and Sport -- holding
   the speed limit, the acceleration and braking scales, field weakening, and the
   motor and battery current limits. Applying one writes it to the controller and

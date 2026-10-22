@@ -149,7 +149,12 @@ bool vescParseSetupValues(const uint8_t *payload, size_t len, VescSetupValues &o
   i += 4;   // eRPM
   v.speedMs = readFloat32(payload, 1e3F, i);
   v.voltage = readFloat16(payload, 1e1F, i);
-  i += 2;   // controller-reported charge level
+  v.batteryLevel = readFloat16(payload, 1e3F, i);
+  // The VESC divides remaining watt-hours by configured capacity. With no
+  // battery configuration that is 0/0 and the float16 encoder writes 0, which
+  // is indistinguishable from a truly empty pack; treat 0 as "not available"
+  // and fall back to the display's voltage curve.
+  v.batteryLevelValid = isfinite(v.batteryLevel) && v.batteryLevel > 0.0F && v.batteryLevel <= 1.0F;
   i += 4;   // amp hours
   i += 4;   // amp hours charged
   i += 4;   // watt hours
@@ -239,6 +244,13 @@ bool vescParseMcconfTemp(const uint8_t *payload, size_t len, VescMcconfTemp &out
   v.wattMax = vescReadFloat32Auto(payload, i);
   v.inCurrentMin = vescReadFloat32Auto(payload, i);
   v.inCurrentMax = vescReadFloat32Auto(payload, i);
+  if (len >= 50) {
+    v.motorPoles = payload[i++];
+    v.gearRatio = vescReadFloat32Auto(payload, i);
+    v.wheelDiameterM = vescReadFloat32Auto(payload, i);
+    v.setupValid = v.motorPoles >= 2 && isfinite(v.gearRatio) && v.gearRatio > 0.01F &&
+                   isfinite(v.wheelDiameterM) && v.wheelDiameterM >= 0.05F && v.wheelDiameterM <= 2.0F;
+  }
 
   out = v;
   return true;
